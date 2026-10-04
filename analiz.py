@@ -81,11 +81,12 @@ def genel_ozet(conn):
         """)
         stats = cur.fetchone()
 
-        cur.execute("SELECT esya, fiyat_sayisal FROM pazar_verileri ORDER BY fiyat_sayisal DESC LIMIT 1;")
+        cur.execute("SELECT esya, fiyat_sayisal FROM pazar_verileri WHERE fiyat_sayisal IS NOT NULL ORDER BY fiyat_sayisal DESC LIMIT 1;")
         en_pahali = cur.fetchone()
 
-        cur.execute("SELECT esya, fiyat_sayisal FROM pazar_verileri ORDER BY fiyat_sayisal ASC LIMIT 1;")
+        cur.execute("SELECT esya, fiyat_sayisal FROM pazar_verileri WHERE fiyat_sayisal IS NOT NULL ORDER BY fiyat_sayisal ASC LIMIT 1;")
         en_ucuz = cur.fetchone()
+
 
         cur.execute("SELECT esya, hacim_sayisal FROM pazar_verileri ORDER BY hacim_sayisal DESC NULLS LAST LIMIT 1;")
         en_likit = cur.fetchone()
