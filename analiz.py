@@ -27,7 +27,6 @@ def get_db_connection():
     return psycopg2.connect(DB_LINK)
 
 
-
 def veritabani_senkronize_et(conn):
     """
     Eğer ana scriptten sayısal olmayan eski/yeni kayıtlar girildiyse
@@ -41,13 +40,13 @@ def veritabani_senkronize_et(conn):
             p_match = re.search(r'[\d.,]+', f_str or '')
             p_val = None
             if p_match:
-                raw_p = p_match.group(0)
-                if ',' in raw_p and '.' in raw_p:
-                    raw_p = raw_p.replace(',', '')
-                elif ',' in raw_p and '.' not in raw_p:
-                    raw_p = raw_p.replace(',', '.')
+                raw = p_match.group(0)
+                if ',' in raw and '.' in raw:
+                    raw = raw.replace(',', '')
+                elif ',' in raw and '.' not in raw:
+                    raw = raw.replace(',', '.')
                 try:
-                    p_val = float(raw_p)
+                    p_val = float(raw)
                 except ValueError:
                     pass
 
@@ -181,7 +180,6 @@ def anomali_ve_arbitraj_analizi(conn):
         """)
         rows = cur.fetchall()
 
-    # Silah skin gruplama
     gruplar = {}
     import re
     for r in rows:
@@ -210,7 +208,6 @@ def anomali_ve_arbitraj_analizi(conn):
             h_str = f"{h:,}" if h is not None else "Yok"
             print(f"   • {w:<15}: ${f:<7} (24s Hacim: {h_str})")
 
-        # Karşılaştırma kontrolü
         for i in range(len(sirali_wearlar)):
             for j in range(i + 1, len(sirali_wearlar)):
                 iyi_wear = sirali_wearlar[i]
@@ -218,7 +215,6 @@ def anomali_ve_arbitraj_analizi(conn):
                 fiyat_iyi = weardata[iyi_wear]['fiyat']
                 fiyat_kotu = weardata[kotu_wear]['fiyat']
 
-                # Eğer daha kötü aşınma daha pahalıysa anomali!
                 if fiyat_kotu > fiyat_iyi:
                     anomali_var = True
                     fark = fiyat_kotu - fiyat_iyi
@@ -250,9 +246,9 @@ def likidite_analizi(conn):
     print("💧 LİKİDİTE VE TİCARET RİSK ANALİZİ (24s Satış Hacmi)")
     print("═" * 80)
 
-    cok_yuksek = []  # > 1000
-    orta = []        # 100 - 1000
-    dusuk = []       # < 100
+    cok_yuksek = []
+    orta = []
+    dusuk = []
 
     for r in rows:
         h = r['hacim_sayisal']
