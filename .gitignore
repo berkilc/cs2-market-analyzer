@@ -1,0 +1,9 @@
+# Ortam değişkenleri (Neon DB şifresi)
+.env
+
+# Python önbellek ve geçici dosyalar
+__pycache__/
+*.pyc
+*.csv
+.vscode/
+
