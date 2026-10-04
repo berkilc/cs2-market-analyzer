@@ -36,3 +36,4 @@ Counter-Strike 2 Steam Topluluk Pazarı için otomatik fiyat takip, karşılaşt
    ```bash
    python analiz.py
    ```
+
