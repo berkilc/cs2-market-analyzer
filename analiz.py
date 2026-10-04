@@ -13,14 +13,9 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# .env dosyasından DATABASE_URL al
+# .env dosyasından veya doğrudan koddan DB_LINK al
 load_dotenv()
-DB_LINK = os.getenv("DATABASE_URL")
-
-if not DB_LINK:
-    print("❌ HATA: DATABASE_URL .env dosyasında bulunamadı!")
-    print("Lütfen .env dosyanızı kontrol edin.")
-    sys.exit(1)
+DB_LINK = os.getenv("DATABASE_URL") or "postgresql://neondb_owner:npg_Ug9oVF5yEZMd@ep-long-bonus-b2lw5t0c-pooler.c-6.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 
 def get_db_connection():
@@ -40,13 +35,13 @@ def veritabani_senkronize_et(conn):
             p_match = re.search(r'[\d.,]+', f_str or '')
             p_val = None
             if p_match:
-                raw = p_match.group(0)
-                if ',' in raw and '.' in raw:
-                    raw = raw.replace(',', '')
-                elif ',' in raw and '.' not in raw:
-                    raw = raw.replace(',', '.')
+                raw_p = p_match.group(0)
+                if ',' in raw_p and '.' in raw_p:
+                    raw_p = raw_p.replace(',', '')
+                elif ',' in raw_p and '.' not in raw_p:
+                    raw_p = raw_p.replace(',', '.')
                 try:
-                    p_val = float(raw)
+                    p_val = float(raw_p)
                 except ValueError:
                     pass
 
@@ -81,12 +76,11 @@ def genel_ozet(conn):
         """)
         stats = cur.fetchone()
 
-        cur.execute("SELECT esya, fiyat_sayisal FROM pazar_verileri WHERE fiyat_sayisal IS NOT NULL ORDER BY fiyat_sayisal DESC LIMIT 1;")
+        cur.execute("SELECT esya, fiyat_sayisal FROM pazar_verileri ORDER BY fiyat_sayisal DESC LIMIT 1;")
         en_pahali = cur.fetchone()
 
-        cur.execute("SELECT esya, fiyat_sayisal FROM pazar_verileri WHERE fiyat_sayisal IS NOT NULL ORDER BY fiyat_sayisal ASC LIMIT 1;")
+        cur.execute("SELECT esya, fiyat_sayisal FROM pazar_verileri ORDER BY fiyat_sayisal ASC LIMIT 1;")
         en_ucuz = cur.fetchone()
-
 
         cur.execute("SELECT esya, hacim_sayisal FROM pazar_verileri ORDER BY hacim_sayisal DESC NULLS LAST LIMIT 1;")
         en_likit = cur.fetchone()
@@ -105,7 +99,7 @@ def genel_ozet(conn):
 
 
 def tum_esyalar_tablosu(conn):
-    """Her eşya için en güncel fiyat, ortalama ve hacim tablosunu listeler."""
+    """Her eşya için en güncel fiyat, ortalama, hacim ve son kayıt tarih/saatini listeler."""
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("""
             WITH son_kayitlar AS (
@@ -113,7 +107,7 @@ def tum_esyalar_tablosu(conn):
                     esya,
                     fiyat_sayisal as guncel_fiyat,
                     hacim_sayisal as guncel_hacim,
-                    kayit_tarihi as son_tarih,
+                    tarih as son_tarih,
                     saat as son_saat
                 FROM pazar_verileri
                 ORDER BY esya, id DESC
@@ -145,15 +139,23 @@ def tum_esyalar_tablosu(conn):
         """)
         rows = cur.fetchall()
 
-        print("\n" + "═" * 90)
-        print(f"{'EŞYA ADI':<38} | {'GÜNCEL':<8} | {'MİN':<8} | {'MAKS':<8} | {'HACİM (24S)':<11} | {'KAYIT'}")
-        print("─" * 90)
+        print("\n" + "═" * 105)
+        print(f"{'EŞYA ADI':<34} | {'GÜNCEL':<8} | {'MİN':<8} | {'MAKS':<8} | {'HACİM (24S)':<11} | {'SON GÜNCELLEME':<17} | {'TARAMA'}")
+        print("─" * 105)
 
         for r in rows:
             hacim_str = f"{r['guncel_hacim']:,}" if r['guncel_hacim'] is not None else "Yok"
-            ad = (r['esya'][:35] + '...') if len(r['esya']) > 38 else r['esya']
-            print(f"{ad:<38} | ${r['guncel_fiyat']:<7} | ${r['min_f']:<7} | ${r['max_f']:<7} | {hacim_str:<11} | {r['kayit_adet']} adet")
-        print("═" * 90)
+            ad = (r['esya'][:31] + '...') if len(r['esya']) > 34 else r['esya']
+            
+            # Tarih ve saat formatlama (Örn: 04.10.2026 22:04)
+            if r['son_tarih'] and r['son_saat']:
+                zaman_str = f"{r['son_tarih'].strftime('%d.%m.%Y')} {r['son_saat'].strftime('%H:%M')}"
+            else:
+                zaman_str = "-"
+
+            print(f"{ad:<34} | ${r['guncel_fiyat']:<7} | ${r['min_f']:<7} | ${r['max_f']:<7} | {hacim_str:<11} | {zaman_str:<17} | {r['kayit_adet']} kez")
+        print("═" * 105)
+
 
 
 def anomali_ve_arbitraj_analizi(conn):
@@ -181,6 +183,7 @@ def anomali_ve_arbitraj_analizi(conn):
         """)
         rows = cur.fetchall()
 
+    # Silah skin gruplama
     gruplar = {}
     import re
     for r in rows:
@@ -209,6 +212,7 @@ def anomali_ve_arbitraj_analizi(conn):
             h_str = f"{h:,}" if h is not None else "Yok"
             print(f"   • {w:<15}: ${f:<7} (24s Hacim: {h_str})")
 
+        # Karşılaştırma kontrolü
         for i in range(len(sirali_wearlar)):
             for j in range(i + 1, len(sirali_wearlar)):
                 iyi_wear = sirali_wearlar[i]
@@ -216,6 +220,7 @@ def anomali_ve_arbitraj_analizi(conn):
                 fiyat_iyi = weardata[iyi_wear]['fiyat']
                 fiyat_kotu = weardata[kotu_wear]['fiyat']
 
+                # Eğer daha kötü aşınma daha pahalıysa anomali!
                 if fiyat_kotu > fiyat_iyi:
                     anomali_var = True
                     fark = fiyat_kotu - fiyat_iyi
@@ -247,9 +252,9 @@ def likidite_analizi(conn):
     print("💧 LİKİDİTE VE TİCARET RİSK ANALİZİ (24s Satış Hacmi)")
     print("═" * 80)
 
-    cok_yuksek = []
-    orta = []
-    dusuk = []
+    cok_yuksek = []  # > 1000
+    orta = []        # 100 - 1000
+    dusuk = []       # < 100
 
     for r in rows:
         h = r['hacim_sayisal']
