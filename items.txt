@@ -1,0 +1,30 @@
+# ====================================================================
+# CS2 Market Analyzer - Toplu Tarama Listesi (items.txt)
+# ====================================================================
+# İstediğiniz eşyaları alt alta yazabilirsiniz.
+# '#' ile başlayan satırlar ve boşluklar yok sayılır.
+# ====================================================================
+
+# --- KASALAR ---
+Gallery Case
+Kilowatt Case
+Revolution Case
+Dreams & Nightmares Case
+Recoil Case
+Snakebite Case
+Fracture Case
+Clutch Case
+Prisma 2 Case
+Danger Zone Case
+Glove Case
+
+# --- POPÜLER SKİNLER ---
+AK-47 | Redline
+AK-47 | Slate
+AWP | Asiimov
+AWP | Atheris
+M4A1-S | Printstream
+M4A4 | The Emperor
+Desert Eagle | Printstream
+USP-S | The Traitor
+Glock-18 | Water Elemental

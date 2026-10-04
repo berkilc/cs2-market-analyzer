@@ -1,29 +1,39 @@
 # 📈 CS2 Market Analyzer & Cloud Price Tracker
 
-Counter-Strike 2 Steam Topluluk Pazarı için otomatik fiyat takip, karşılaştırma, grafik arayüzlü (GUI) ve **Neon Console (PostgreSQL)** bulut veritabanı entegreli masaüstü piyasa analiz sistemi.
+Counter-Strike 2 Steam Topluluk Pazarı için otomatik fiyat takip, karşılaştırma ve **Neon Console (PostgreSQL)** bulut veritabanı entegreli piyasa analiz sistemi.
 
 ## 🚀 Özellikler
-- 🖥️ **Modern Masaüstü Grafik Arayüzü (GUI):** Siyah konsol ekranı yerine modern, koyu temalı pencereli masaüstü uygulaması.
-- 🔍 **Canlı Steam Taraması:** Eşya adını yazıp tek tıkla tüm aşınma seviyelerini tarama ve değişim rozetlerini (📉 DÜŞTÜ / 📈 ARTTI) görme.
-- 📋 **Neon Cloud Veritabanı Tablosu:** Tüm taranan eşyaları filtreleme, min/maks/güncel fiyatları ve son kayıt tarih/saatini listeleme.
-- 🧠 **Piyasa Analiz Motoru:** Aşınma arbitrajı ve likidite risk analizleri.
-- 📦 **Taşınabilir Standalone EXE:** Python kurulumu gerektirmeden çift tıkla çalışan `.exe` sürümü.
+- **Gerçek Zamanlı Steam Verisi:** En güncel pazar fiyatını ve 24 saatlik satış hacmini Steam API üzerinden çeker.
+- **Neon Cloud PostgreSQL Entegrasyonu:** Tüm fiyat geçmişini bulutta güvenli ve sayısal formatta saklar.
+- **Piyasa İstatistik & Analiz Motoru (`analiz.py`):** Arbitraj, aşınma tutarsızlıkları ve likidite analizleri yapar.
+- **Steam 429 Koruması:** Otomatik bekleme ve tekrar deneme mekanizması.
 
 ## 🛠️ Teknolojiler
 - **Python 3**
-- **CustomTkinter** (Modern Dark Mode Masaüstü Arayüzü)
-- **Neon Serverless PostgreSQL**
+- **Neon Serverless Postgres**
 - **psycopg2** & **python-dotenv**
 - **Requests**
 
 ## ⚙️ Kurulum ve Çalıştırma
 
-### 1. Masaüstü Uygulamasını (EXE) Çalıştırma
-`dist` klasöründeki **`CS2_Market_Analyzer.exe`** dosyasına çift tıklamanız yeterlidir!
+1. **Gereksinimleri Yükleyin:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-### 2. Kaynak Koddan Çalıştırma
-```bash
-pip install -r requirements.txt
-python gui_app.py
-```
-*(Konsol sürümünü çalıştırmak isterseniz: `python app.py`)*
+2. **`.env` Dosyasını Oluşturun:**
+   Proje ana dizininde `.env` dosyası oluşturup Neon bağlantı linkinizi ekleyin:
+   ```env
+   DATABASE_URL="postgresql://kullanici:sifre@ep-xxxx.eu-central-1.aws.neon.tech/neondb?sslmode=require"
+   ```
+
+3. **Pazar Botunu Çalıştırın:**
+   ```bash
+   python main.py
+   ```
+
+4. **Veritabanı Analizini Başlatın:**
+   ```bash
+   python analiz.py
+   ```
+

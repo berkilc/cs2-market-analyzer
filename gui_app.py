@@ -698,3 +698,4 @@ class CS2MarketApp(ctk.CTk):
 if __name__ == "__main__":
     app = CS2MarketApp()
     app.mainloop()
+
