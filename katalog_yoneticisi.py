@@ -83,8 +83,16 @@ def katalogu_indir_ve_yukle(progress_callback=None):
         crates_url = 'https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/crates.json'
         res_crates = requests.get(crates_url, timeout=25).json()
 
+        # 3. Çıkartmalar (Stickers)
+        stickers_url = 'https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/stickers.json'
+        res_stickers = requests.get(stickers_url, timeout=25).json()
+
+        # 4. Ajanlar (Agents)
+        agents_url = 'https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/agents.json'
+        res_agents = requests.get(agents_url, timeout=25).json()
+
         if progress_callback:
-            progress_callback(f"📦 {len(res_skins)} skin ve {len(res_crates)} kasa işleniyor...", 40)
+            progress_callback(f"📦 {len(res_skins)} skin, {len(res_crates)} kasa, {len(res_stickers)} çıkartma işleniyor...", 40)
 
         kayitlar_dict = {}
 
@@ -150,6 +158,38 @@ def katalogu_indir_ve_yukle(progress_callback=None):
                     is_rare,
                     image
                 )
+
+        # Çıkartmaları ekle (11,000+ sticker)
+        for st in res_stickers:
+            st_name = st.get('name')
+            if not st_name:
+                continue
+            rarity_obj = st.get('rarity')
+            st_rarity = rarity_obj.get('name') if isinstance(rarity_obj, dict) else 'Çıkartma'
+            kayitlar_dict[st_name.strip()] = (
+                st_name.strip(),
+                'Çıkartmalar',
+                st_rarity,
+                'Çıkartma',
+                'Extraordinary' in st_rarity or 'Exotic' in st_rarity,
+                st.get('image')
+            )
+
+        # Ajanları ekle
+        for ag in res_agents:
+            ag_name = ag.get('name')
+            if not ag_name:
+                continue
+            rarity_obj = ag.get('rarity')
+            ag_rarity = rarity_obj.get('name') if isinstance(rarity_obj, dict) else 'Ajan'
+            kayitlar_dict[ag_name.strip()] = (
+                ag_name.strip(),
+                'Ajanlar',
+                ag_rarity,
+                'Ajan',
+                'Master' in ag_rarity,
+                ag.get('image')
+            )
 
         kayitlar = list(kayitlar_dict.values())
 
@@ -222,6 +262,53 @@ def katalog_ara(arama_metni, limit=15):
     except Exception as e:
         print("Arama Hatası:", e)
         return []
+
+
+def katalog_filtrele(arama_metni="", kategori="Tümü", limit=100, offset=0):
+    """Katalog tablosundan arama ve kategoriye göre eşyaları filtreler."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return 0, []
+
+        conditions = []
+        params = []
+
+        if arama_metni and arama_metni.strip():
+            words = [w.strip() for w in arama_metni.replace("|", " ").split() if w.strip()]
+            for w in words:
+                conditions.append("esya_adi ILIKE %s")
+                params.append(f"%{w}%")
+
+        if kategori and kategori != "Tümü" and "Tüm" not in kategori:
+            clean_kat = kategori.split("(")[0].strip()
+            for emoji in ["📦", "🔪", "🧤", "🔫", "💥", "⚡", "🛡️", "🏷️", "🕵️"]:
+                clean_kat = clean_kat.replace(emoji, "").strip()
+            conditions.append("kategori = %s")
+            params.append(clean_kat)
+
+        where_sql = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(f"SELECT COUNT(*) FROM esya_katalogu {where_sql};", tuple(params))
+            total_count = cur.fetchone()['count']
+
+            query_params = list(params)
+            query_params.extend([limit, offset])
+            cur.execute(f"""
+                SELECT esya_adi, kategori, alt_kategori, silah, gorsel_url
+                FROM esya_katalogu
+                {where_sql}
+                ORDER BY esya_adi ASC
+                LIMIT %s OFFSET %s;
+            """, tuple(query_params))
+            rows = cur.fetchall()
+
+        conn.close()
+        return total_count, rows
+    except Exception as e:
+        print("Katalog Filtre Hatası:", e)
+        return 0, []
 
 
 def kategori_istatistikleri():

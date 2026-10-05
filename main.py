@@ -8,7 +8,6 @@ import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-import katalog_yoneticisi as ky
 
 # Windows konsolunda Türkçe karakter ve emoji desteği
 if sys.platform == "win32":
@@ -430,68 +429,6 @@ def manuel_arama():
         print("-" * 50)
 
 
-# 6. KATALOG ARAMA VE KATEGORİ TARAMA MENÜSÜ
-def katalog_arama_menusu():
-    print("\n" + "═" * 60)
-    print("📚 9,468 EŞYALIK CS2 KATALOĞUNDAN ARAMA & KATEGORİ TARAMA")
-    print("═" * 60)
-    print("1. 🔍 Katalogda Eşya Adı Ara (Örn: AWP, Karambit, Redline)")
-    print("2. 📦 Kategorideki Eşyaları Listele & Tara (Kasalar, Bıçaklar vs.)")
-    print("3. 🔄 Kataloğu API'den Güncelle")
-    print("0. 🔙 Ana Menüye Dön")
-
-    secim = input("Seçiminiz (0-3): ").strip()
-    if secim == "1":
-        kelime = input("\nAramak istediğiniz eşya adını yazın: ").strip()
-        sonuclar = ky.katalog_ara(kelime, limit=15)
-        if not sonuclar:
-            print(f"❌ '{kelime}' ile eşleşen katalog eşyası bulunamadı.")
-            return
-        print(f"\nBulunan {len(sonuclar)} eşya:")
-        for idx, r in enumerate(sonuclar, 1):
-            print(f" {idx:2d}. {r['esya_adi']}  [{r['kategori']} | {r['alt_kategori']}]")
-
-        sec = input("\nFiyatını taramak istediğiniz numara (veya hepsi için 'H', çıkış için Enter): ").strip()
-        if sec.upper() == "H":
-            toplu_esya_tara([r['esya_adi'] for r in sonuclar], scan_wears=False)
-        elif sec.isdigit() and 1 <= int(sec) <= len(sonuclar):
-            tek_esya_tara(sonuclar[int(sec)-1]['esya_adi'])
-
-    elif secim == "2":
-        stats = ky.kategori_istatistikleri()
-        print("\n--- Mevcut Kategoriler ---")
-        for idx, s in enumerate(stats, 1):
-            print(f" {idx}. {s['kategori']} ({s['adet']} adet)")
-
-        k_sec = input("\nTaramak istediğiniz kategori numarası: ").strip()
-        if k_sec.isdigit() and 1 <= int(k_sec) <= len(stats):
-            secilen_kat = stats[int(k_sec)-1]['kategori']
-            adet_str = input(f"'{secilen_kat}' içinden kaç eşya taransın? (Varsayılan: 20): ").strip()
-            limit = int(adet_str) if adet_str.isdigit() else 20
-            esyalar = ky.kategori_esyalarini_al(secilen_kat, limit=limit)
-            toplu_esya_tara(esyalar, scan_wears=False)
-
-    elif secim == "3":
-        print("\n🌐 CS2 API üzerinden eşya kataloğu indiriliyor...")
-        def cb(msg, pct):
-            print(f"[{pct}%] {msg}")
-        n, m = ky.katalogu_indir_ve_yukle(cb)
-        print(f"\n✅ Tamamlandı: {n} adet eşya kaydedildi.")
-
-
-# 7. STEAM EN ÇOK SATAN 50 EŞYAYI HIZLI TARA
-def steam_hizli_populer_tara():
-    adet_str = input("\nKaç popüler eşya taransın? (Örn: 20, 50, varsayılan 50): ").strip()
-    adet = int(adet_str) if adet_str.isdigit() else 50
-    print(f"\n🔥 Steam'den en çok satan {adet} eşya toplu olarak çekiliyor...")
-    def cb(msg, pct):
-        print(f"[{pct}%] {msg}")
-    kaydedilen, esyalar = ky.steam_populer_tara_ve_kaydet(adet, cb)
-    print(f"\n✅ Toplam {kaydedilen} adet popüler eşya Neon veritabanına kaydedildi!")
-    for e in esyalar[:10]:
-        print(f" • {e['esya']:<35} | {e['fiyat']:<10} | {e['hacim']}")
-
-
 # ANA MENÜ
 def ana_menu():
     veritabani_hazirla()
@@ -505,12 +442,10 @@ def ana_menu():
         print("║  3. 📌 Kişisel Takip Listem (Portföy Yönetimi)          ║")
         print("║  4. 📁 items.txt Dosyasından Toplu Tara                 ║")
         print("║  5. 🔥 Steam'de En Çok Satan 15 Trend Eşyayı Tara        ║")
-        print("║  6. 📚 9,468 Eşyalık Katalogdan Ara / Kategori Tara      ║")
-        print("║  7. ⚡ Steam En Popüler 50 Eşyayı Toplu Hızlı Tara       ║")
         print("║  0. 🚪 Çıkış                                             ║")
         print("╚" + "═" * 58 + "╝")
 
-        secim = input("Seçiminiz (0-7): ").strip()
+        secim = input("Seçiminiz (0-5): ").strip()
 
         if secim == "1":
             manuel_arama()
@@ -522,15 +457,11 @@ def ana_menu():
             dosyadan_toplu_tara()
         elif secim == "5":
             steam_trendlerini_tara()
-        elif secim == "6":
-            katalog_arama_menusu()
-        elif secim == "7":
-            steam_hizli_populer_tara()
         elif secim in ["0", "q", "exit"]:
             print("\n👋 İyi oyunlar! Bot kapatılıyor.")
             break
         else:
-            print("⚠️ Geçersiz seçim! Lütfen 0 ile 7 arasında bir sayı girin.")
+            print("⚠️ Geçersiz seçim! Lütfen 0 ile 5 arasında bir sayı girin.")
 
 
 if __name__ == "__main__":
