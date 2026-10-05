@@ -281,9 +281,7 @@ class CS2MarketApp(ctk.CTk):
         self.setup_analytics_tab()
 
     # ------------------ SEKME 1: EŞYA TARAMA & PAKETLER ------------------
-    # ------------------ SEKME 1: EŞYA TARAMA & PAKETLER ------------------
     def setup_scan_tab(self):
-        # Arama kutusu alanı
         search_card = ctk.CTkFrame(self.tab_scan, fg_color="#2b2d42", corner_radius=10)
         search_card.pack(fill="x", padx=10, pady=(10, 6))
 
@@ -318,7 +316,7 @@ class CS2MarketApp(ctk.CTk):
         )
         self.scan_btn.pack(side="right")
 
-        # Katalog Otomatik Öneri Paneli (Arama sonuçları için)
+        # Katalog Otomatik Öneri Paneli
         self.suggestions_frame = ctk.CTkFrame(search_card, fg_color="#181a24", corner_radius=8)
 
         # HIZLI PAKETLER VE KATEGORİ ÇUBUĞU
@@ -412,7 +410,7 @@ class CS2MarketApp(ctk.CTk):
         self.progress_bar = ctk.CTkProgressBar(self.tab_scan, mode="indeterminate", height=4)
         self.scan_status_label = ctk.CTkLabel(
             self.tab_scan, 
-            text="İster arama çubuğuna yazıp önerileri seçin, ister 9,468 eşyalık katalogdan kategori taratın.",
+            text="İster tek bir eşya arayın, ister 9,468 eşyalık katalogdan dilediğiniz kategoriyi tarayın.",
             font=ctk.CTkFont(size=13),
             text_color="#8d99ae"
         )
@@ -487,7 +485,70 @@ class CS2MarketApp(ctk.CTk):
         self.item_entry.insert(0, name)
         self.suggestions_frame.pack_forget()
 
-    # ------------------ KATEGORİ VE HIZLI STEAM TARAMASI ------------------
+    # ------------------ TEK VE ÇOKLU TARAMA METOTLARI ------------------
+    def start_single_scan(self):
+        if self.is_scanning:
+            return
+        item_text = self.item_entry.get().strip()
+        if not item_text:
+            messagebox.showwarning("Eksik Bilgi", "Lütfen bir eşya adı girin!")
+            return
+        scan_wears = bool(self.wear_checkbox.get())
+        self.start_batch_scan([item_text], scan_wears=scan_wears)
+
+    def scan_from_file(self):
+        if self.is_scanning:
+            return
+        file_path = os.path.join(base_dir, "items.txt")
+        if not os.path.exists(file_path):
+            file_path = filedialog.askopenfilename(
+                title="Eşya Listesi Dosyasını Seçin",
+                filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")]
+            )
+            if not file_path:
+                return
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+            if not lines:
+                messagebox.showinfo("Dosya Boş", f"{file_path} dosyasında taranacak eşya bulunamadı.")
+                return
+            self.start_batch_scan(lines, scan_wears=False)
+        except Exception as e:
+            messagebox.showerror("Hata", f"Dosya okunurken hata oluştu: {e}")
+
+    def scan_steam_trends_fast(self):
+        if self.is_scanning:
+            return
+        self.is_scanning = True
+        self.stop_requested = False
+        self.scan_btn.configure(state="disabled", text="⏳ Taranıyor...")
+        self.stop_btn.configure(state="normal")
+        self.progress_bar.pack(fill="x", padx=10, pady=(0, 5))
+        self.progress_bar.start()
+
+        for widget in self.results_scroll.winfo_children():
+            widget.destroy()
+
+        threading.Thread(target=self._run_steam_popular_thread, daemon=True).start()
+
+    def _run_steam_popular_thread(self):
+        def cb(msg, pct):
+            self.after(0, lambda m=msg: self.scan_status_label.configure(text=m))
+
+        self.after(0, lambda: self.scan_status_label.configure(text="🔥 Steam'in en çok satan 50 eşyası toplu çekiliyor..."))
+        count, items = ky.steam_populer_tara_ve_kaydet(50, cb)
+
+        for it in items:
+            prev_price, prev_time = self.get_previous_price(it['esya'])
+            curr_price = it.get('fiyat_sayisal')
+            self.after(0, lambda e=it['esya'], f=it['fiyat'], h=it['hacim'], cp=curr_price, pp=prev_price, pt=prev_time:
+                self._add_result_card(e, f, h, cp, pp, pt, saved=True)
+            )
+
+        self.after(0, self._scan_finished)
+
     def scan_selected_category(self):
         if self.is_scanning:
             return
@@ -530,37 +591,6 @@ class CS2MarketApp(ctk.CTk):
                 self.after(0, self.check_initial_db_status)
 
             threading.Thread(target=_thread, daemon=True).start()
-
-    def scan_steam_trends_fast(self):
-        if self.is_scanning:
-            return
-        self.is_scanning = True
-        self.stop_requested = False
-        self.scan_btn.configure(state="disabled", text="⏳ Taranıyor...")
-        self.stop_btn.configure(state="normal")
-        self.progress_bar.pack(fill="x", padx=10, pady=(0, 5))
-        self.progress_bar.start()
-
-        for widget in self.results_scroll.winfo_children():
-            widget.destroy()
-
-        threading.Thread(target=self._run_steam_popular_thread, daemon=True).start()
-
-    def _run_steam_popular_thread(self):
-        def cb(msg, pct):
-            self.after(0, lambda m=msg: self.scan_status_label.configure(text=m))
-
-        self.after(0, lambda: self.scan_status_label.configure(text="🔥 Steam'in en çok satan 50 eşyası toplu çekiliyor..."))
-        count, items = ky.steam_populer_tara_ve_kaydet(50, cb)
-
-        for it in items:
-            prev_price, prev_time = self.get_previous_price(it['esya'])
-            curr_price = it.get('fiyat_sayisal')
-            self.after(0, lambda e=it['esya'], f=it['fiyat'], h=it['hacim'], cp=curr_price, pp=prev_price, pt=prev_time:
-                self._add_result_card(e, f, h, cp, pp, pt, saved=True)
-            )
-
-        self.after(0, self._scan_finished)
 
     def stop_scan(self):
         if self.is_scanning:
@@ -839,51 +869,69 @@ class CS2MarketApp(ctk.CTk):
         if not selected:
             messagebox.showwarning("Seçim Yok", "Lütfen silmek istediğiniz eşyayı tablodan seçin!")
             return
-        item_vals = self.wl_tree.item(selected[0])['values']
-        item_id = item_vals[0]
+        row = self.wl_tree.item(selected[0])['values']
+        item_id = row[0]
+        item_name = row[1]
 
-        try:
-            conn = self.get_db_connection()
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM takip_listesi WHERE id = %s;", (item_id,))
-                conn.commit()
-            conn.close()
-            self.refresh_watchlist_table()
-        except Exception as e:
-            messagebox.showerror("Hata", f"Silinemedi: {e}")
+        if messagebox.askyesno("Onay", f"'{item_name}' takip listenizden silinsin mi?"):
+            try:
+                conn = self.get_db_connection()
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM takip_listesi WHERE id = %s;", (item_id,))
+                    conn.commit()
+                conn.close()
+                self.refresh_watchlist_table()
+            except Exception as e:
+                messagebox.showerror("Hata", f"Silinemedi: {e}")
 
     def refresh_watchlist_table(self):
-        threading.Thread(target=self._fetch_watchlist_thread, daemon=True).start()
+        for item in self.wl_tree.get_children():
+            self.wl_tree.delete(item)
 
-    def _fetch_watchlist_thread(self):
         try:
             conn = self.get_db_connection()
             if not conn:
                 return
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT id, esya, hedef_fiyat, ekleme_tarihi FROM takip_listesi ORDER BY id DESC;")
+                cur.execute("""
+                    SELECT id, esya, hedef_fiyat, ekleme_tarihi
+                    FROM takip_listesi
+                    ORDER BY id DESC;
+                """)
                 rows = cur.fetchall()
             conn.close()
 
-            self.after(0, lambda: self._update_wl_tree(rows))
-        except Exception as e:
-            print("Takip Listesi Çekme Hatası:", e)
+            for r in rows:
+                hedef_str = f"${r['hedef_fiyat']:.2f}" if r['hedef_fiyat'] else "-"
+                tarih_str = r['ekleme_tarihi'].strftime("%Y-%m-%d %H:%M") if r['ekleme_tarihi'] else "-"
+                self.wl_tree.insert("", "end", values=(r['id'], r['esya'], hedef_str, tarih_str))
 
-    def _update_wl_tree(self, rows):
-        self.wl_tree.delete(*self.wl_tree.get_children())
-        for r in rows:
-            t_str = f"${r['hedef_fiyat']:.2f}" if r['hedef_fiyat'] else "-"
-            dt_str = r['ekleme_tarihi'].strftime('%d.%m.%Y %H:%M') if r['ekleme_tarihi'] else "-"
-            self.wl_tree.insert("", "end", values=(r['id'], r['esya'], t_str, dt_str))
-        self.wl_count_label.configure(text=f"Takip Edilen: {len(rows)} eşya")
+            self.wl_count_label.configure(text=f"Takip Edilen: {len(rows)} Eşya")
+        except Exception as e:
+            print("Takip Listesi Yükleme Hatası:", e)
 
     def scan_watchlist_items(self):
-        items = [self.wl_tree.item(child)['values'][1] for child in self.wl_tree.get_children()]
-        if not items:
-            messagebox.showinfo("Liste Boş", "Takip listenizde henüz taranacak eşya bulunmuyor. Önce yukarıdan eşya ekleyin!")
+        if self.is_scanning:
             return
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT esya, hedef_fiyat FROM takip_listesi ORDER BY id ASC;")
+                items = cur.fetchall()
+            conn.close()
+        except Exception as e:
+            messagebox.showerror("Hata", f"Takip listesi okunamadı: {e}")
+            return
+
+        if not items:
+            messagebox.showinfo("Liste Boş", "Takip listenizde taranacak eşya bulunmuyor.")
+            return
+
         self.tabview.set("🔍 Eşya Tarama & Paketler")
-        self.start_batch_scan(items, scan_wears=False)
+        raw_names = [it['esya'] for it in items]
+        self.start_batch_scan(raw_names, scan_wears=False)
 
     # ------------------ SEKME 3: NEON VERİTABANI TABLOSU ------------------
     def setup_database_tab(self):
@@ -891,7 +939,7 @@ class CS2MarketApp(ctk.CTk):
         top_bar.pack(fill="x", padx=10, pady=(10, 5))
 
         self.table_search_entry = ctk.CTkEntry(
-            top_bar, placeholder_text="Eşya adıyla anlık filtrele...", width=320, height=36
+            top_bar, placeholder_text="Eşya adıyla filtrele...", width=320, height=36
         )
         self.table_search_entry.pack(side="left", padx=(0, 10))
         self.table_search_entry.bind("<KeyRelease>", lambda e: self.filter_table())
@@ -911,18 +959,18 @@ class CS2MarketApp(ctk.CTk):
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
 
         self.tree.heading("esya", text="Eşya Adı")
-        self.tree.heading("guncel", text="Güncel ($)")
+        self.tree.heading("guncel", text="Son Fiyat ($)")
         self.tree.heading("min", text="Min ($)")
         self.tree.heading("max", text="Maks ($)")
         self.tree.heading("hacim", text="24s Hacim")
         self.tree.heading("zaman", text="Son Güncelleme")
-        self.tree.heading("tarama", text="Tarama")
+        self.tree.heading("tarama", text="Kayıt")
 
         self.tree.column("esya", width=340, anchor="w")
         self.tree.column("guncel", width=100, anchor="center")
         self.tree.column("min", width=90, anchor="center")
         self.tree.column("max", width=90, anchor="center")
-        self.tree.column("hacim", width=110, anchor="center")
+        self.tree.column("hacim", width=120, anchor="center")
         self.tree.column("zaman", width=150, anchor="center")
         self.tree.column("tarama", width=80, anchor="center")
 
@@ -932,15 +980,15 @@ class CS2MarketApp(ctk.CTk):
             "Treeview",
             background="#24273a",
             foreground="#cad3f5",
-            rowheight=30,
+            rowheight=32,
             fieldbackground="#24273a",
-            font=("Segoe UI", 10)
+            font=('Segoe UI', 10)
         )
         style.configure(
             "Treeview.Heading",
-            background="#1e2030",
+            background="#1e1e2e",
             foreground="#ffffff",
-            font=("Segoe UI", 11, "bold")
+            font=('Segoe UI', 10, 'bold')
         )
         style.map("Treeview", background=[('selected', '#3b82f6')])
 
@@ -949,12 +997,18 @@ class CS2MarketApp(ctk.CTk):
         scrollbar_y.pack(side="right", fill="y")
         self.tree.pack(fill="both", expand=True, padx=5, pady=5)
 
-        self.all_table_data = []
+    def filter_table(self):
+        query = self.table_search_entry.get().lower().strip()
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        filtered = [r for r in getattr(self, "_cached_db_rows", []) if query in r['esya'].lower()]
+        self._populate_table(filtered)
 
     def refresh_database_table(self):
-        threading.Thread(target=self._fetch_table_thread, daemon=True).start()
+        threading.Thread(target=self._db_loader_thread, daemon=True).start()
 
-    def _fetch_table_thread(self):
+    def _db_loader_thread(self):
         try:
             conn = self.get_db_connection()
             if not conn:
@@ -962,70 +1016,63 @@ class CS2MarketApp(ctk.CTk):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     WITH son_kayitlar AS (
-                        SELECT DISTINCT ON (esya)
-                            esya,
-                            fiyat_sayisal as guncel_fiyat,
-                            hacim_sayisal as guncel_hacim,
-                            tarih as son_tarih,
-                            saat as son_saat
+                        SELECT DISTINCT ON (esya) 
+                            esya, fiyat_sayisal, hacim_sayisal, kayit_tarihi
                         FROM pazar_verileri
                         ORDER BY esya, id DESC
                     ),
                     istatistikler AS (
                         SELECT 
                             esya,
-                            COUNT(*) as kayit_adet,
-                            MIN(fiyat_sayisal) as min_f,
-                            MAX(fiyat_sayisal) as max_f
+                            MIN(fiyat_sayisal) as min_fiyat,
+                            MAX(fiyat_sayisal) as max_fiyat,
+                            COUNT(*) as kayit_adet
                         FROM pazar_verileri
                         WHERE fiyat_sayisal IS NOT NULL
                         GROUP BY esya
                     )
                     SELECT 
                         s.esya,
-                        s.guncel_fiyat,
-                        s.guncel_hacim,
-                        i.min_f,
-                        i.max_f,
-                        i.kayit_adet,
-                        s.son_tarih,
-                        s.son_saat
+                        s.fiyat_sayisal as son_fiyat,
+                        s.hacim_sayisal as son_hacim,
+                        s.kayit_tarihi as son_tarih,
+                        i.min_fiyat,
+                        i.max_fiyat,
+                        i.kayit_adet
                     FROM son_kayitlar s
-                    JOIN istatistikler i ON s.esya = i.esya
-                    ORDER BY s.guncel_fiyat DESC NULLS LAST;
+                    LEFT JOIN istatistikler i ON s.esya = i.esya
+                    ORDER BY s.kayit_tarihi DESC;
                 """)
                 rows = cur.fetchall()
             conn.close()
 
-            self.all_table_data = rows
-            self.after(0, self.filter_table)
+            self._cached_db_rows = rows
+            self.after(0, lambda: self._populate_table(rows))
         except Exception as e:
-            print("Tablo Veri Çekme Hatası:", e)
+            print("Veritabanı Tablo Hatası:", e)
 
-    def filter_table(self):
-        query = self.table_search_entry.get().strip().lower()
-        self.tree.delete(*self.tree.get_children())
+    def _populate_table(self, rows):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
 
-        filtered_count = 0
-        for r in self.all_table_data:
-            if query and query not in r['esya'].lower():
-                continue
-
-            filtered_count += 1
-            hacim_str = f"{r['guncel_hacim']:,}" if r['guncel_hacim'] is not None else "-"
-            zaman_str = f"{r['son_tarih'].strftime('%d.%m.%Y')} {r['son_saat'].strftime('%H:%M')}" if (r['son_tarih'] and r['son_saat']) else "-"
+        for r in rows:
+            fiyat_str = f"${r['son_fiyat']:.2f}" if r['son_fiyat'] is not None else "-"
+            min_str = f"${r['min_fiyat']:.2f}" if r['min_fiyat'] is not None else "-"
+            max_str = f"${r['max_fiyat']:.2f}" if r['max_fiyat'] is not None else "-"
+            hacim_str = f"{r['son_hacim']:,}" if r['son_hacim'] is not None else "Yok"
+            zaman_str = r['son_tarih'].strftime("%Y-%m-%d %H:%M") if r['son_tarih'] else "-"
 
             self.tree.insert("", "end", values=(
                 r['esya'],
-                f"${r['guncel_fiyat']:.2f}" if r['guncel_fiyat'] else "-",
-                f"${r['min_f']:.2f}" if r['min_f'] else "-",
-                f"${r['max_f']:.2f}" if r['max_f'] else "-",
+                fiyat_str,
+                min_str,
+                max_str,
                 hacim_str,
                 zaman_str,
                 f"{r['kayit_adet']} kez"
             ))
 
-        self.table_count_label.configure(text=f"Listelenen: {filtered_count} eşya")
+        self.table_count_label.configure(text=f"Listelenen Eşya: {len(rows)}")
 
     # ------------------ SEKME 4: PİYASA ANALİZLERİ ------------------
     def setup_analytics_tab(self):
@@ -1033,36 +1080,56 @@ class CS2MarketApp(ctk.CTk):
         control_bar.pack(fill="x", padx=10, pady=(10, 5))
 
         anomali_btn = ctk.CTkButton(
-            control_bar, text="🧠 Aşınma & Arbitraj Analizi Yap", font=ctk.CTkFont(weight="bold"),
+            control_bar,
+            text="🧠 Aşınma & Arbitraj Analizi Yap",
+            font=ctk.CTkFont(weight="bold"),
             command=self.run_anomali_analysis
         )
         anomali_btn.pack(side="left", padx=(0, 10))
 
         likidite_btn = ctk.CTkButton(
-            control_bar, text="💧 Likidite & Risk Analizi Yap", font=ctk.CTkFont(weight="bold"),
+            control_bar,
+            text="💧 Likidite & Risk Analizi Yap",
+            font=ctk.CTkFont(weight="bold"),
             command=self.run_likidite_analysis
         )
         likidite_btn.pack(side="left", padx=5)
 
         self.analytics_textbox = ctk.CTkTextbox(
-            self.tab_analytics, font=ctk.CTkFont(family="Consolas", size=13),
-            fg_color="#1e1e24", corner_radius=10
+            self.tab_analytics,
+            font=ctk.CTkFont(family="Consolas", size=13),
+            fg_color="#1e1e24",
+            corner_radius=10
         )
         self.analytics_textbox.pack(fill="both", expand=True, padx=10, pady=10)
         self.analytics_textbox.insert("1.0", "Yukarıdaki butonlara basarak veritabanınızdaki pazar analizlerini anında çalıştırabilirsiniz.\n\n"
-                                             "• Aşınma & Arbitraj: Well-Worn > Field-Tested gibi fiyat tutarsızlıklarını yakalar.\n"
-                                             "• Likidite & Risk: 24 saatlik işlem hacmine göre alım/satım risk kategorilerini belirler.")
+                                             "• Aşınma & Arbitraj: Factory New > Minimal Wear > Field Tested fiyat tutarsızlıklarını yakalar.\n"
+                                             "• Likidite & Risk: 24 saatlik işlem hacmine göre eşyaları likit ve riskli olarak sınıflandırır.")
+
+    def _update_analytics_text(self, text):
+        self.analytics_textbox.delete("1.0", "end")
+        self.analytics_textbox.insert("1.0", text)
 
     def run_anomali_analysis(self):
+        self._update_analytics_text("🧠 Veritabanındaki tüm aşınma seviyeleri taranıyor ve anomali tespiti yapılıyor...")
         threading.Thread(target=self._anomali_thread, daemon=True).start()
 
     def _anomali_thread(self):
-        wear_order = {"Factory New": 1, "Minimal Wear": 2, "Field-Tested": 3, "Well-Worn": 4, "Battle-Scarred": 5}
+        wear_order = {
+            "Factory New": 1,
+            "Minimal Wear": 2,
+            "Field-Tested": 3,
+            "Well-Worn": 4,
+            "Battle-Scarred": 5
+        }
         try:
             conn = self.get_db_connection()
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT DISTINCT ON (esya) esya, fiyat_sayisal, hacim_sayisal
+                    SELECT DISTINCT ON (esya)
+                        esya,
+                        fiyat_sayisal,
+                        hacim_sayisal
                     FROM pazar_verileri
                     WHERE fiyat_sayisal IS NOT NULL AND esya LIKE '%(%)%'
                     ORDER BY esya, id DESC;
@@ -1072,38 +1139,38 @@ class CS2MarketApp(ctk.CTk):
 
             gruplar = {}
             for r in rows:
-                m = re.match(r'^(.*?)\s*\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)$', r['esya'])
+                m = re.match(r"^(.*?)\s*\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)$", r['esya'])
                 if m:
                     skin = m.group(1).strip()
                     w = m.group(2)
                     if skin not in gruplar:
                         gruplar[skin] = {}
-                    gruplar[skin][w] = {'fiyat': float(r['fiyat_sayisal']), 'hacim': r['hacim_sayisal']}
+                    gruplar[skin][w] = {
+                        'fiyat': float(r['fiyat_sayisal']),
+                        'hacim': r['hacim_sayisal']
+                    }
 
             out = ["═" * 70, "🧠 AŞINMA SEVİYESİ & FİYAT ANOMALİ / ARBİTRAJ ANALİZİ", "═" * 70, ""]
             anomali_var = False
 
-            for skin, data in gruplar.items():
-                out.append(f"🔫 {skin}:")
-                sirali = sorted(data.keys(), key=lambda w: wear_order.get(w, 99))
-                for w in sirali:
-                    f = data[w]['fiyat']
-                    h = data[w]['hacim']
-                    h_str = f"{h:,}" if h is not None else "Yok"
-                    out.append(f"   • {w:<15}: ${f:<7.2f} (24s Hacim: {h_str})")
+            for skin, wears in gruplar.items():
+                mevcut = [w for w in wear_order if w in wears]
+                if len(mevcut) < 2:
+                    continue
 
-                for i in range(len(sirali)):
-                    for j in range(i + 1, len(sirali)):
-                        iyi = sirali[i]
-                        kotu = sirali[j]
-                        f_iyi = data[iyi]['fiyat']
-                        f_kotu = data[kotu]['fiyat']
-                        if f_kotu > f_iyi:
-                            anomali_var = True
-                            fark = f_kotu - f_iyi
-                            out.append(f"\n   ⚠️ DİKKAT (Piyasa Anomalisi): '{kotu}' (${f_kotu:.2f}), daha temiz olan '{iyi}' (${f_iyi:.2f}) sürümünden ${fark:.2f} daha pahalı!")
-                            out.append(f"      💡 Yorum: '{kotu}' sürümünde stok azlığı veya yapay şişirme olabilir. Alıcılar için '{iyi}' çok daha avantajlı!\n")
-                out.append("")
+                for i in range(len(mevcut) - 1):
+                    ust = mevcut[i]
+                    alt = mevcut[i+1]
+                    f_ust = wears[ust]['fiyat']
+                    f_alt = wears[alt]['fiyat']
+
+                    if f_ust < f_alt:
+                        anomali_var = True
+                        out.append(f"🚨 FİYAT ANOMALİSİ / ARBİTRAJ FIRSATI TESPİT EDİLDİ!")
+                        out.append(f"   Skin: {skin}")
+                        out.append(f"   Daha İyi Aşınma: {ust:<15} -> ${f_ust:.2f}")
+                        out.append(f"   Daha Kötü Aşınma: {alt:<15} -> ${f_alt:.2f}")
+                        out.append(f"   💡 Normalde {ust} daha pahalı olmalıdır! Mantıksız piyasa fiyatlaması var.\n")
 
             if not anomali_var:
                 out.append("✅ Tüm aşınma sıralamaları piyasa normlarına uygun görünüyor.")
@@ -1113,6 +1180,7 @@ class CS2MarketApp(ctk.CTk):
             self.after(0, lambda: self._update_analytics_text(f"Hata oluştu: {e}"))
 
     def run_likidite_analysis(self):
+        self._update_analytics_text("💧 Pazar verileri likidite ve hacim riskine göre analiz ediliyor...")
         threading.Thread(target=self._likidite_thread, daemon=True).start()
 
     def _likidite_thread(self):
@@ -1120,7 +1188,10 @@ class CS2MarketApp(ctk.CTk):
             conn = self.get_db_connection()
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT DISTINCT ON (esya) esya, fiyat_sayisal, hacim_sayisal
+                    SELECT DISTINCT ON (esya)
+                        esya,
+                        fiyat_sayisal,
+                        hacim_sayisal
                     FROM pazar_verileri
                     WHERE hacim_sayisal IS NOT NULL
                     ORDER BY esya, id DESC;
@@ -1128,30 +1199,26 @@ class CS2MarketApp(ctk.CTk):
                 rows = cur.fetchall()
             conn.close()
 
-            out = ["═" * 70, "💧 LİKİDİTE VE TİCARET RİSK ANALİZİ (24s Satış Hacmi)", "═" * 70, ""]
-            cok_yuksek = [r for r in rows if r['hacim_sayisal'] >= 1000]
+            yuksek = [r for r in rows if r['hacim_sayisal'] >= 1000]
             orta = [r for r in rows if 100 <= r['hacim_sayisal'] < 1000]
             dusuk = [r for r in rows if r['hacim_sayisal'] < 100]
 
-            out.append("🟢 YÜKSEK LİKİDİTE (Hızlı Alınıp Satılanlar - Düşük Risk):")
-            for r in sorted(cok_yuksek, key=lambda x: x['hacim_sayisal'], reverse=True):
+            out = ["═" * 70, "💧 LİKİDİTE VE TİCARET RİSK ANALİZİ (24 SAATLİK HACİM)", "═" * 70, ""]
+            out.append(f"🟢 Yüksek Likidite (1.000+ Adet/24s) : {len(yuksek)} eşya  -> Hızlı satılır, arbitraj için ideal")
+            out.append(f"🟡 Orta Likidite   (100 - 1.000 Adet) : {len(orta)} eşya  -> Dengeli piyasa")
+            out.append(f"🔴 Düşük / İllikit (< 100 Adet)       : {len(dusuk)} eşya  -> Satılması zor, sermaye bağlanabilir!\n")
+
+            out.append("--- 🔥 EN ÇOK İŞLEM GÖREN İLK 5 LİKİT EŞYA ---")
+            for r in sorted(yuksek, key=lambda x: x['hacim_sayisal'], reverse=True)[:5]:
                 out.append(f"   • {r['esya']:<36} | Hacim: {r['hacim_sayisal']:,} adet | Fiyat: ${r['fiyat_sayisal']}")
 
-            out.append("\n🟡 ORTA LİKİDİTE (Dengeli Piyasa):")
-            for r in sorted(orta, key=lambda x: x['hacim_sayisal'], reverse=True):
-                out.append(f"   • {r['esya']:<36} | Hacim: {r['hacim_sayisal']:,} adet | Fiyat: ${r['fiyat_sayisal']}")
-
-            out.append("\n🔴 DÜŞÜK LİKİDİTE (Yavaş Satılanlar - Fiyat Manipülasyonuna Açık):")
+            out.append("\n--- ⚠️ DÜŞÜK HACİMLİ (RİSKLİ) EŞYALAR ---")
             for r in sorted(dusuk, key=lambda x: x['hacim_sayisal'], reverse=True):
                 out.append(f"   • {r['esya']:<36} | Hacim: {r['hacim_sayisal']:,} adet | Fiyat: ${r['fiyat_sayisal']}")
 
             self.after(0, lambda: self._update_analytics_text("\n".join(out)))
         except Exception as e:
             self.after(0, lambda: self._update_analytics_text(f"Hata oluştu: {e}"))
-
-    def _update_analytics_text(self, content):
-        self.analytics_textbox.delete("1.0", "end")
-        self.analytics_textbox.insert("1.0", content)
 
 
 if __name__ == "__main__":
