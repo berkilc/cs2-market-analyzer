@@ -12,6 +12,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import requests
+import katalog_yoneticisi as ky
 
 # Windows konsolunda UTF-8 desteği
 if sys.platform == "win32":
@@ -68,11 +69,13 @@ class CS2MarketApp(ctk.CTk):
         super().__init__()
 
         self.title("CS2 Market Analyzer & Cloud Tracker")
-        self.geometry("1100x760")
-        self.minsize(960, 650)
+        self.geometry("1100x800")
+        self.minsize(980, 680)
 
         self.is_scanning = False
         self.stop_requested = False
+        self._search_timer = None
+        self._wl_search_timer = None
 
         self.db_link = os.getenv("DATABASE_URL")
 
@@ -119,12 +122,19 @@ class CS2MarketApp(ctk.CTk):
                 """)
                 cur.execute("SELECT COUNT(*) FROM pazar_verileri;")
                 count = cur.fetchone()[0]
+
+                katalog_count = 0
+                try:
+                    cur.execute("SELECT COUNT(*) FROM esya_katalogu;")
+                    katalog_count = cur.fetchone()[0]
+                except Exception:
+                    conn.rollback()
+
                 conn.commit()
             conn.close()
 
-            self.after(0, lambda: self.status_badge.configure(
-                text=f"🟢 Neon Cloud Bağlı ({count} Kayıt)", text_color="#2ecc71"
-            ))
+            status_text = f"🟢 Neon Cloud Bağlı ({count} Kayıt | {katalog_count} Katalog)" if katalog_count else f"🟢 Neon Cloud Bağlı ({count} Kayıt)"
+            self.after(0, lambda: self.status_badge.configure(text=status_text, text_color="#2ecc71"))
             self.after(0, self.refresh_database_table)
             self.after(0, self.refresh_watchlist_table)
         except Exception as e:
@@ -271,6 +281,7 @@ class CS2MarketApp(ctk.CTk):
         self.setup_analytics_tab()
 
     # ------------------ SEKME 1: EŞYA TARAMA & PAKETLER ------------------
+    # ------------------ SEKME 1: EŞYA TARAMA & PAKETLER ------------------
     def setup_scan_tab(self):
         # Arama kutusu alanı
         search_card = ctk.CTkFrame(self.tab_scan, fg_color="#2b2d42", corner_radius=10)
@@ -287,6 +298,7 @@ class CS2MarketApp(ctk.CTk):
         )
         self.item_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.item_entry.bind("<Return>", lambda e: self.start_single_scan())
+        self.item_entry.bind("<KeyRelease>", self._on_search_key_release)
 
         self.wear_checkbox = ctk.CTkCheckBox(
             input_container, 
@@ -306,48 +318,101 @@ class CS2MarketApp(ctk.CTk):
         )
         self.scan_btn.pack(side="right")
 
-        # HIZLI PAKETLER ÇUBUĞU (Presets Bar)
-        preset_card = ctk.CTkFrame(search_card, fg_color="transparent")
-        preset_card.pack(fill="x", padx=15, pady=(0, 12))
+        # Katalog Otomatik Öneri Paneli (Arama sonuçları için)
+        self.suggestions_frame = ctk.CTkFrame(search_card, fg_color="#181a24", corner_radius=8)
 
-        preset_lbl = ctk.CTkLabel(preset_card, text="⚡ Hızlı Paketler:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#a5adcb")
-        preset_lbl.pack(side="left", padx=(0, 10))
+        # HIZLI PAKETLER VE KATEGORİ ÇUBUĞU
+        self.preset_card = ctk.CTkFrame(search_card, fg_color="transparent")
+        self.preset_card.pack(fill="x", padx=15, pady=(0, 10))
+
+        # Satır 1: Hazır Paketler
+        row1 = ctk.CTkFrame(self.preset_card, fg_color="transparent")
+        row1.pack(fill="x", pady=(0, 6))
+
+        preset_lbl = ctk.CTkLabel(row1, text="⚡ Hızlı Paketler:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#a5adcb")
+        preset_lbl.pack(side="left", padx=(0, 8))
 
         btn_cases = ctk.CTkButton(
-            preset_card, text="📦 Tüm Kasalar (13+)", height=30, fg_color="#3a0ca3", hover_color="#4361ee",
+            row1, text="📦 Popüler Kasalar", height=30, fg_color="#3a0ca3", hover_color="#4361ee",
             font=ctk.CTkFont(size=12), command=lambda: self.start_batch_scan(CASES_PRESET, scan_wears=False)
         )
-        btn_cases.pack(side="left", padx=4)
+        btn_cases.pack(side="left", padx=3)
 
         btn_skins = ctk.CTkButton(
-            preset_card, text="🔫 Popüler Skinler", height=30, fg_color="#3a0ca3", hover_color="#4361ee",
+            row1, text="🔫 Popüler Skinler", height=30, fg_color="#3a0ca3", hover_color="#4361ee",
             font=ctk.CTkFont(size=12), command=lambda: self.start_batch_scan(POPULAR_SKINS_PRESET, scan_wears=True)
         )
-        btn_skins.pack(side="left", padx=4)
+        btn_skins.pack(side="left", padx=3)
 
         btn_steam = ctk.CTkButton(
-            preset_card, text="🔥 Steam Trendleri (Top 15)", height=30, fg_color="#d90429", hover_color="#ef233c",
-            font=ctk.CTkFont(size=12), command=self.scan_steam_trends
+            row1, text="🔥 Top 50 Trend (Hızlı)", height=30, fg_color="#d90429", hover_color="#ef233c",
+            font=ctk.CTkFont(size=12), command=self.scan_steam_trends_fast
         )
-        btn_steam.pack(side="left", padx=4)
+        btn_steam.pack(side="left", padx=3)
 
         btn_file = ctk.CTkButton(
-            preset_card, text="📁 items.txt Dosyasından", height=30, fg_color="#2b9348", hover_color="#55a630",
+            row1, text="📁 items.txt", height=30, fg_color="#2b9348", hover_color="#55a630",
             font=ctk.CTkFont(size=12), command=self.scan_from_file
         )
-        btn_file.pack(side="left", padx=4)
+        btn_file.pack(side="left", padx=3)
 
         self.stop_btn = ctk.CTkButton(
-            preset_card, text="⏹️ Durdur", height=30, width=80, fg_color="#7209b7", hover_color="#b5179e",
+            row1, text="⏹️ Durdur", height=30, width=80, fg_color="#7209b7", hover_color="#b5179e",
             font=ctk.CTkFont(size=12, weight="bold"), command=self.stop_scan, state="disabled"
         )
-        self.stop_btn.pack(side="right", padx=4)
+        self.stop_btn.pack(side="right", padx=3)
+
+        # Satır 2: 9,468 Eşyalık Katalogdan Kategori Tarama
+        row2 = ctk.CTkFrame(self.preset_card, fg_color="transparent")
+        row2.pack(fill="x", pady=(2, 2))
+
+        cat_lbl = ctk.CTkLabel(row2, text="📚 9,468'lik Katalog:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#a5adcb")
+        cat_lbl.pack(side="left", padx=(0, 8))
+
+        self.cat_combobox = ctk.CTkComboBox(
+            row2,
+            values=[
+                "Kategori Seçin...",
+                "📦 Kasa & Kapsül (479)",
+                "🔪 Bıçaklar (1714)",
+                "🧤 Eldivenler (470)",
+                "🔫 Tüfekler (2302)",
+                "💥 Tabancalar (2023)",
+                "⚡ Hafif Makineliler (1433)",
+                "🛡️ Ağır Silahlar (1012)"
+            ],
+            width=210,
+            height=30,
+            font=ctk.CTkFont(size=12)
+        )
+        self.cat_combobox.pack(side="left", padx=3)
+
+        self.cat_limit_combobox = ctk.CTkComboBox(
+            row2,
+            values=["20 Eşya", "50 Eşya", "100 Eşya"],
+            width=100,
+            height=30,
+            font=ctk.CTkFont(size=12)
+        )
+        self.cat_limit_combobox.pack(side="left", padx=3)
+
+        btn_cat_scan = ctk.CTkButton(
+            row2, text="🚀 Kategoriyi Tara", height=30, width=130, fg_color="#4361ee", hover_color="#3a0ca3",
+            font=ctk.CTkFont(size=12, weight="bold"), command=self.scan_selected_category
+        )
+        btn_cat_scan.pack(side="left", padx=4)
+
+        btn_sync_catalog = ctk.CTkButton(
+            row2, text="🔄 Kataloğu Güncelle", height=30, width=140, fg_color="#343a40", hover_color="#495057",
+            font=ctk.CTkFont(size=12), command=self.sync_catalog_from_api
+        )
+        btn_sync_catalog.pack(side="right", padx=3)
 
         # Durum çubuğu
         self.progress_bar = ctk.CTkProgressBar(self.tab_scan, mode="indeterminate", height=4)
         self.scan_status_label = ctk.CTkLabel(
             self.tab_scan, 
-            text="İster tek bir eşya yazın, ister yukarıdaki hazır butonlarla onlarca eşyayı tek tıkla taratın.",
+            text="İster arama çubuğuna yazıp önerileri seçin, ister 9,468 eşyalık katalogdan kategori taratın.",
             font=ctk.CTkFont(size=13),
             text_color="#8d99ae"
         )
@@ -363,60 +428,139 @@ class CS2MarketApp(ctk.CTk):
         )
         self.results_scroll.pack(fill="both", expand=True, padx=10, pady=(6, 10))
 
-    def start_single_scan(self):
-        if self.is_scanning:
+    # ------------------ KATALOG OTOMATİK TAMAMLAMA ------------------
+    def _on_search_key_release(self, event):
+        if event.keysym in ("Return", "Up", "Down", "Escape"):
+            if event.keysym == "Escape":
+                self.suggestions_frame.pack_forget()
             return
-        item_text = self.item_entry.get().strip()
-        if not item_text:
-            messagebox.showwarning("Eksik Bilgi", "Lütfen bir eşya adı girin!")
-            return
-        scan_wears = bool(self.wear_checkbox.get())
-        self.start_batch_scan([item_text], scan_wears=scan_wears)
+        if self._search_timer:
+            self.after_cancel(self._search_timer)
+        self._search_timer = self.after(250, self._do_catalog_search)
 
-    def scan_from_file(self):
-        if self.is_scanning:
+    def _do_catalog_search(self):
+        text = self.item_entry.get().strip()
+        if len(text) < 2:
+            self.suggestions_frame.pack_forget()
             return
-        file_path = os.path.join(base_dir, "items.txt")
-        if not os.path.exists(file_path):
-            file_path = filedialog.askopenfilename(
-                title="Eşya Listesi Dosyasını Seçin",
-                filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")]
+        threading.Thread(target=self._fetch_suggestions_thread, args=(text,), daemon=True).start()
+
+    def _fetch_suggestions_thread(self, query):
+        results = ky.katalog_ara(query, limit=5)
+        self.after(0, lambda: self._show_suggestions(results))
+
+    def _show_suggestions(self, results):
+        for widget in self.suggestions_frame.winfo_children():
+            widget.destroy()
+
+        if not results:
+            self.suggestions_frame.pack_forget()
+            return
+
+        self.suggestions_frame.pack(fill="x", padx=15, pady=(0, 8), before=self.preset_card)
+
+        header = ctk.CTkLabel(
+            self.suggestions_frame,
+            text="💡 Katalog Önerileri (Seçmek için tıklayın):",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#8d99ae"
+        )
+        header.pack(anchor="w", padx=8, pady=(4, 2))
+
+        for item in results:
+            name = item['esya_adi']
+            cat = item.get('kategori', '')
+            btn = ctk.CTkButton(
+                self.suggestions_frame,
+                text=f"🎯 {name}  [{cat}]",
+                anchor="w",
+                height=26,
+                fg_color="#24273a",
+                hover_color="#3a0ca3",
+                font=ctk.CTkFont(size=12),
+                command=lambda n=name: self._select_suggestion(n)
             )
-            if not file_path:
-                return
+            btn.pack(fill="x", padx=6, pady=2)
 
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
-            if not lines:
-                messagebox.showinfo("Dosya Boş", f"{file_path} dosyasında taranacak eşya bulunamadı.")
-                return
-            self.start_batch_scan(lines, scan_wears=False)
-        except Exception as e:
-            messagebox.showerror("Hata", f"Dosya okunurken hata oluştu: {e}")
+    def _select_suggestion(self, name):
+        self.item_entry.delete(0, 'end')
+        self.item_entry.insert(0, name)
+        self.suggestions_frame.pack_forget()
 
-    def scan_steam_trends(self):
+    # ------------------ KATEGORİ VE HIZLI STEAM TARAMASI ------------------
+    def scan_selected_category(self):
         if self.is_scanning:
             return
-        self.scan_status_label.configure(text="🌐 Steam Topluluk Pazarından güncel trendler çekiliyor...")
-        threading.Thread(target=self._fetch_steam_trends_thread, daemon=True).start()
+        val = self.cat_combobox.get()
+        if "Kategori Seçin" in val:
+            messagebox.showwarning("Seçim Yapın", "Lütfen önce bir kategori seçin!")
+            return
 
-    def _fetch_steam_trends_thread(self):
-        url = "https://steamcommunity.com/market/search/render/?query=&start=0&count=15&search_descriptions=0&sort_column=popular&sort_dir=desc&appid=730&norender=1"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9'
-        }
-        try:
-            res = requests.get(url, headers=headers, timeout=10)
-            if res.status_code == 200:
-                results = res.json().get('results', [])
-                items = [x['hash_name'] for x in results]
-                self.after(0, lambda: self.start_batch_scan(items, scan_wears=False))
-            else:
-                self.after(0, lambda: messagebox.showerror("Hata", f"Steam bağlantı hatası: {res.status_code}"))
-        except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Hata", f"Steam trendleri çekilemedi: {e}"))
+        cat_name = val.split("(")[0].strip()
+        for emoji in ["📦", "🔪", "🧤", "🔫", "💥", "⚡", "🛡️"]:
+            cat_name = cat_name.replace(emoji, "").strip()
+
+        limit_str = self.cat_limit_combobox.get()
+        limit = 20
+        if "50" in limit_str:
+            limit = 50
+        elif "100" in limit_str:
+            limit = 100
+
+        items = ky.kategori_esyalarini_al(cat_name, limit=limit)
+        if not items:
+            messagebox.showinfo("Boş Kategori", f"'{cat_name}' kategorisinde eşya bulunamadı.")
+            return
+
+        self.start_batch_scan(items, scan_wears=False)
+
+    def sync_catalog_from_api(self):
+        if messagebox.askyesno("Kataloğu Güncelle", "CS2 API üzerinden ~9.500 eşya indirilip Neon Bulut veritabanı güncellenecek. Devam edilsin mi?"):
+            self.scan_status_label.configure(text="🌐 Eşya kataloğu indiriliyor...")
+            self.progress_bar.pack(fill="x", padx=10, pady=(0, 5))
+            self.progress_bar.start()
+
+            def _thread():
+                def cb(msg, pct):
+                    self.after(0, lambda m=msg: self.scan_status_label.configure(text=m))
+                total, msg = ky.katalogu_indir_ve_yukle(cb)
+                self.after(0, lambda: self.progress_bar.stop())
+                self.after(0, lambda: self.progress_bar.pack_forget())
+                self.after(0, lambda: messagebox.showinfo("Katalog Güncellendi", f"Toplam {total} eşya Neon veritabanına kaydedildi!"))
+                self.after(0, self.check_initial_db_status)
+
+            threading.Thread(target=_thread, daemon=True).start()
+
+    def scan_steam_trends_fast(self):
+        if self.is_scanning:
+            return
+        self.is_scanning = True
+        self.stop_requested = False
+        self.scan_btn.configure(state="disabled", text="⏳ Taranıyor...")
+        self.stop_btn.configure(state="normal")
+        self.progress_bar.pack(fill="x", padx=10, pady=(0, 5))
+        self.progress_bar.start()
+
+        for widget in self.results_scroll.winfo_children():
+            widget.destroy()
+
+        threading.Thread(target=self._run_steam_popular_thread, daemon=True).start()
+
+    def _run_steam_popular_thread(self):
+        def cb(msg, pct):
+            self.after(0, lambda m=msg: self.scan_status_label.configure(text=m))
+
+        self.after(0, lambda: self.scan_status_label.configure(text="🔥 Steam'in en çok satan 50 eşyası toplu çekiliyor..."))
+        count, items = ky.steam_populer_tara_ve_kaydet(50, cb)
+
+        for it in items:
+            prev_price, prev_time = self.get_previous_price(it['esya'])
+            curr_price = it.get('fiyat_sayisal')
+            self.after(0, lambda e=it['esya'], f=it['fiyat'], h=it['hacim'], cp=curr_price, pp=prev_price, pt=prev_time:
+                self._add_result_card(e, f, h, cp, pp, pt, saved=True)
+            )
+
+        self.after(0, self._scan_finished)
 
     def stop_scan(self):
         if self.is_scanning:
@@ -545,6 +689,7 @@ class CS2MarketApp(ctk.CTk):
             height=38, font=ctk.CTkFont(size=13)
         )
         self.wl_item_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.wl_item_entry.bind("<KeyRelease>", self._on_wl_search_key_release)
 
         self.wl_target_entry = ctk.CTkEntry(
             c, placeholder_text="Hedef Fiyat $ (Opsiyonel)", width=160, height=38, font=ctk.CTkFont(size=13)
@@ -556,6 +701,9 @@ class CS2MarketApp(ctk.CTk):
             command=self.add_to_watchlist
         )
         add_btn.pack(side="left")
+
+        # Takip Listesi Katalog Öneri Paneli
+        self.wl_suggestions_frame = ctk.CTkFrame(add_bar, fg_color="#181a24", corner_radius=8)
 
         btn_bar = ctk.CTkFrame(self.tab_watchlist, fg_color="transparent")
         btn_bar.pack(fill="x", padx=10, pady=(0, 6))
@@ -622,10 +770,69 @@ class CS2MarketApp(ctk.CTk):
 
             self.wl_item_entry.delete(0, "end")
             self.wl_target_entry.delete(0, "end")
+            self.wl_suggestions_frame.pack_forget()
             self.refresh_watchlist_table()
             messagebox.showinfo("Başarılı", f"'{esya}' takip listenize eklendi!")
         except Exception as e:
             messagebox.showerror("Hata", f"Listeye eklenemedi: {e}")
+
+    # ------------------ TAKİP LİSTESİ KATALOG ÖNERİLERİ ------------------
+    def _on_wl_search_key_release(self, event):
+        if event.keysym in ("Return", "Up", "Down", "Escape"):
+            if event.keysym == "Escape":
+                self.wl_suggestions_frame.pack_forget()
+            return
+        if self._wl_search_timer:
+            self.after_cancel(self._wl_search_timer)
+        self._wl_search_timer = self.after(250, self._do_wl_catalog_search)
+
+    def _do_wl_catalog_search(self):
+        text = self.wl_item_entry.get().strip()
+        if len(text) < 2:
+            self.wl_suggestions_frame.pack_forget()
+            return
+        threading.Thread(target=self._fetch_wl_suggestions_thread, args=(text,), daemon=True).start()
+
+    def _fetch_wl_suggestions_thread(self, query):
+        results = ky.katalog_ara(query, limit=5)
+        self.after(0, lambda: self._show_wl_suggestions(results))
+
+    def _show_wl_suggestions(self, results):
+        for widget in self.wl_suggestions_frame.winfo_children():
+            widget.destroy()
+
+        if not results:
+            self.wl_suggestions_frame.pack_forget()
+            return
+
+        self.wl_suggestions_frame.pack(fill="x", padx=15, pady=(0, 8))
+        header = ctk.CTkLabel(
+            self.wl_suggestions_frame,
+            text="💡 Katalog Önerileri (Seçmek için tıklayın):",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#8d99ae"
+        )
+        header.pack(anchor="w", padx=8, pady=(4, 2))
+
+        for item in results:
+            name = item['esya_adi']
+            cat = item.get('kategori', '')
+            btn = ctk.CTkButton(
+                self.wl_suggestions_frame,
+                text=f"🎯 {name}  [{cat}]",
+                anchor="w",
+                height=26,
+                fg_color="#24273a",
+                hover_color="#3a0ca3",
+                font=ctk.CTkFont(size=12),
+                command=lambda n=name: self._select_wl_suggestion(n)
+            )
+            btn.pack(fill="x", padx=6, pady=2)
+
+    def _select_wl_suggestion(self, name):
+        self.wl_item_entry.delete(0, 'end')
+        self.wl_item_entry.insert(0, name)
+        self.wl_suggestions_frame.pack_forget()
 
     def delete_from_watchlist(self):
         selected = self.wl_tree.selection()
