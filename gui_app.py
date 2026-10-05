@@ -6,7 +6,7 @@ import time
 import urllib.parse
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import customtkinter as ctk
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -21,7 +21,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# .env konumunu tespit et (EXE veya normal çalışma)
+# .env ve dosya konumunu tespit et (EXE veya normal çalışma)
 if getattr(sys, 'frozen', False):
     base_dir = os.path.dirname(sys.executable)
 else:
@@ -30,9 +30,37 @@ else:
 env_path = os.path.join(base_dir, '.env')
 load_dotenv(env_path)
 
-# CustomTkinter Teması
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
+
+# HAZIR PRESET LİSTELERİ
+CASES_PRESET = [
+    "Gallery Case",
+    "Kilowatt Case",
+    "Revolution Case",
+    "Dreams & Nightmares Case",
+    "Recoil Case",
+    "Snakebite Case",
+    "Fracture Case",
+    "Prisma 2 Case",
+    "Danger Zone Case",
+    "Horizon Case",
+    "Spectrum 2 Case",
+    "Clutch Case",
+    "Glove Case"
+]
+
+POPULAR_SKINS_PRESET = [
+    "AK-47 | Redline",
+    "AK-47 | Slate",
+    "AWP | Asiimov",
+    "AWP | Atheris",
+    "M4A1-S | Printstream",
+    "M4A4 | The Emperor",
+    "Desert Eagle | Printstream",
+    "USP-S | The Traitor",
+    "Glock-18 | Water Elemental"
+]
 
 
 class CS2MarketApp(ctk.CTk):
@@ -40,8 +68,8 @@ class CS2MarketApp(ctk.CTk):
         super().__init__()
 
         self.title("CS2 Market Analyzer & Cloud Tracker")
-        self.geometry("1060x720")
-        self.minsize(920, 620)
+        self.geometry("1100x760")
+        self.minsize(960, 650)
 
         self.is_scanning = False
         self.stop_requested = False
@@ -67,7 +95,6 @@ class CS2MarketApp(ctk.CTk):
                 self.after(0, lambda: self.status_badge.configure(text="⚠️ Veritabanı Ayarı Yok", text_color="#f39c12"))
                 return
             with conn.cursor() as cur:
-                # Tablo ve sütunları hazırla
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS pazar_verileri (
                         id SERIAL PRIMARY KEY,
@@ -82,6 +109,14 @@ class CS2MarketApp(ctk.CTk):
                         kayit_tarihi TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS takip_listesi (
+                        id SERIAL PRIMARY KEY,
+                        esya VARCHAR(255) UNIQUE NOT NULL,
+                        hedef_fiyat NUMERIC(10, 2),
+                        ekleme_tarihi TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
                 cur.execute("SELECT COUNT(*) FROM pazar_verileri;")
                 count = cur.fetchone()[0]
                 conn.commit()
@@ -90,14 +125,14 @@ class CS2MarketApp(ctk.CTk):
             self.after(0, lambda: self.status_badge.configure(
                 text=f"🟢 Neon Cloud Bağlı ({count} Kayıt)", text_color="#2ecc71"
             ))
-            # İlk veritabanı tablosunu yükle
             self.after(0, self.refresh_database_table)
+            self.after(0, self.refresh_watchlist_table)
         except Exception as e:
             self.after(0, lambda: self.status_badge.configure(
                 text="🔴 Neon Bağlantı Hatası", text_color="#e74c3c"
             ))
 
-    # ------------------ STEAM API ------------------
+    # ------------------ STEAM API & FORMATLAMA ------------------
     def format_item_name(self, user_input):
         text = user_input.lower().strip().replace(" | ", " ").replace("|", " ")
         weapons = {
@@ -120,7 +155,7 @@ class CS2MarketApp(ctk.CTk):
 
     def get_steam_price(self, item_name, currency=1):
         url = f"https://steamcommunity.com/market/priceoverview/?appid=730&currency={currency}&market_hash_name={urllib.parse.quote(item_name)}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         try:
             res = requests.get(url, headers=headers, timeout=10)
             if res.status_code == 200:
@@ -202,13 +237,12 @@ class CS2MarketApp(ctk.CTk):
 
     # ------------------ ARAYÜZ (UI) TASARIMI ------------------
     def build_ui(self):
-        # Üst Başlık Çubuğu
         header_frame = ctk.CTkFrame(self, fg_color="#1e1e24", corner_radius=0, height=65)
         header_frame.pack(fill="x", side="top")
 
         title_label = ctk.CTkLabel(
             header_frame, 
-            text="🎮 CS2 Market Analyzer", 
+            text="🎮 CS2 Market Analyzer & Portfolio", 
             font=ctk.CTkFont(size=22, weight="bold"),
             text_color="#ffffff"
         )
@@ -222,39 +256,41 @@ class CS2MarketApp(ctk.CTk):
         )
         self.status_badge.pack(side="right", padx=25, pady=15)
 
-        # Sekmeli Görünüm (Tabview)
+        # Sekmeli Görünüm (Tabview) - 4 TANE SEKME
         self.tabview = ctk.CTkTabview(self, corner_radius=12)
         self.tabview.pack(fill="both", expand=True, padx=20, pady=(15, 20))
 
-        self.tab_scan = self.tabview.add("🔍 Canlı Eşya Tarama")
+        self.tab_scan = self.tabview.add("🔍 Eşya Tarama & Paketler")
+        self.tab_watchlist = self.tabview.add("📌 Takip Listem (Portföy)")
         self.tab_database = self.tabview.add("📋 Neon Pazar Tablosu")
         self.tab_analytics = self.tabview.add("🧠 Piyasa Analizleri")
 
         self.setup_scan_tab()
+        self.setup_watchlist_tab()
         self.setup_database_tab()
         self.setup_analytics_tab()
 
-    # ------------------ SEKME 1: CANLI TARAMA ------------------
+    # ------------------ SEKME 1: EŞYA TARAMA & PAKETLER ------------------
     def setup_scan_tab(self):
         # Arama kutusu alanı
         search_card = ctk.CTkFrame(self.tab_scan, fg_color="#2b2d42", corner_radius=10)
-        search_card.pack(fill="x", padx=10, pady=10)
+        search_card.pack(fill="x", padx=10, pady=(10, 6))
 
         input_container = ctk.CTkFrame(search_card, fg_color="transparent")
-        input_container.pack(fill="x", padx=15, pady=15)
+        input_container.pack(fill="x", padx=15, pady=(12, 6))
 
         self.item_entry = ctk.CTkEntry(
             input_container,
             placeholder_text="Eşya adını yazın (Örn: AWP Worm God, AK-47 Redline, Gallery Case)...",
-            height=42,
+            height=40,
             font=ctk.CTkFont(size=14)
         )
         self.item_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.item_entry.bind("<Return>", lambda e: self.start_scan())
+        self.item_entry.bind("<Return>", lambda e: self.start_single_scan())
 
         self.wear_checkbox = ctk.CTkCheckBox(
             input_container, 
-            text="Tüm Aşınmaları Tara (FN, MW, FT, WW, BS)", 
+            text="Aşınmaları Tara (FN..BS)", 
             font=ctk.CTkFont(size=12)
         )
         self.wear_checkbox.pack(side="left", padx=10)
@@ -262,23 +298,60 @@ class CS2MarketApp(ctk.CTk):
 
         self.scan_btn = ctk.CTkButton(
             input_container,
-            text="🚀 Fiyatı Tara & Kaydet",
+            text="🚀 Tara & Kaydet",
             font=ctk.CTkFont(size=14, weight="bold"),
-            height=42,
-            width=180,
-            command=self.start_scan
+            height=40,
+            width=150,
+            command=self.start_single_scan
         )
         self.scan_btn.pack(side="right")
 
-        # Tarama durum çubuğu
+        # HIZLI PAKETLER ÇUBUĞU (Presets Bar)
+        preset_card = ctk.CTkFrame(search_card, fg_color="transparent")
+        preset_card.pack(fill="x", padx=15, pady=(0, 12))
+
+        preset_lbl = ctk.CTkLabel(preset_card, text="⚡ Hızlı Paketler:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#a5adcb")
+        preset_lbl.pack(side="left", padx=(0, 10))
+
+        btn_cases = ctk.CTkButton(
+            preset_card, text="📦 Tüm Kasalar (13+)", height=30, fg_color="#3a0ca3", hover_color="#4361ee",
+            font=ctk.CTkFont(size=12), command=lambda: self.start_batch_scan(CASES_PRESET, scan_wears=False)
+        )
+        btn_cases.pack(side="left", padx=4)
+
+        btn_skins = ctk.CTkButton(
+            preset_card, text="🔫 Popüler Skinler", height=30, fg_color="#3a0ca3", hover_color="#4361ee",
+            font=ctk.CTkFont(size=12), command=lambda: self.start_batch_scan(POPULAR_SKINS_PRESET, scan_wears=True)
+        )
+        btn_skins.pack(side="left", padx=4)
+
+        btn_steam = ctk.CTkButton(
+            preset_card, text="🔥 Steam Trendleri (Top 15)", height=30, fg_color="#d90429", hover_color="#ef233c",
+            font=ctk.CTkFont(size=12), command=self.scan_steam_trends
+        )
+        btn_steam.pack(side="left", padx=4)
+
+        btn_file = ctk.CTkButton(
+            preset_card, text="📁 items.txt Dosyasından", height=30, fg_color="#2b9348", hover_color="#55a630",
+            font=ctk.CTkFont(size=12), command=self.scan_from_file
+        )
+        btn_file.pack(side="left", padx=4)
+
+        self.stop_btn = ctk.CTkButton(
+            preset_card, text="⏹️ Durdur", height=30, width=80, fg_color="#7209b7", hover_color="#b5179e",
+            font=ctk.CTkFont(size=12, weight="bold"), command=self.stop_scan, state="disabled"
+        )
+        self.stop_btn.pack(side="right", padx=4)
+
+        # Durum çubuğu
         self.progress_bar = ctk.CTkProgressBar(self.tab_scan, mode="indeterminate", height=4)
         self.scan_status_label = ctk.CTkLabel(
             self.tab_scan, 
-            text="Aramak istediğiniz eşyayı yukarı yazıp 'Tara & Kaydet' butonuna basın.",
+            text="İster tek bir eşya yazın, ister yukarıdaki hazır butonlarla onlarca eşyayı tek tıkla taratın.",
             font=ctk.CTkFont(size=13),
             text_color="#8d99ae"
         )
-        self.scan_status_label.pack(anchor="w", padx=15, pady=(5, 5))
+        self.scan_status_label.pack(anchor="w", padx=15, pady=(4, 4))
 
         # Sonuç Kartları Alanı
         self.results_scroll = ctk.CTkScrollableFrame(
@@ -288,35 +361,101 @@ class CS2MarketApp(ctk.CTk):
             label_text="📊 Tarama Sonuçları",
             label_font=ctk.CTkFont(size=14, weight="bold")
         )
-        self.results_scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self.results_scroll.pack(fill="both", expand=True, padx=10, pady=(6, 10))
 
-    def start_scan(self):
+    def start_single_scan(self):
         if self.is_scanning:
             return
         item_text = self.item_entry.get().strip()
         if not item_text:
             messagebox.showwarning("Eksik Bilgi", "Lütfen bir eşya adı girin!")
             return
+        scan_wears = bool(self.wear_checkbox.get())
+        self.start_batch_scan([item_text], scan_wears=scan_wears)
 
+    def scan_from_file(self):
+        if self.is_scanning:
+            return
+        file_path = os.path.join(base_dir, "items.txt")
+        if not os.path.exists(file_path):
+            file_path = filedialog.askopenfilename(
+                title="Eşya Listesi Dosyasını Seçin",
+                filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")]
+            )
+            if not file_path:
+                return
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+            if not lines:
+                messagebox.showinfo("Dosya Boş", f"{file_path} dosyasında taranacak eşya bulunamadı.")
+                return
+            self.start_batch_scan(lines, scan_wears=False)
+        except Exception as e:
+            messagebox.showerror("Hata", f"Dosya okunurken hata oluştu: {e}")
+
+    def scan_steam_trends(self):
+        if self.is_scanning:
+            return
+        self.scan_status_label.configure(text="🌐 Steam Topluluk Pazarından güncel trendler çekiliyor...")
+        threading.Thread(target=self._fetch_steam_trends_thread, daemon=True).start()
+
+    def _fetch_steam_trends_thread(self):
+        url = "https://steamcommunity.com/market/search/render/?query=&start=0&count=15&search_descriptions=0&sort_column=popular&sort_dir=desc&appid=730&norender=1"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
+        }
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                results = res.json().get('results', [])
+                items = [x['hash_name'] for x in results]
+                self.after(0, lambda: self.start_batch_scan(items, scan_wears=False))
+            else:
+                self.after(0, lambda: messagebox.showerror("Hata", f"Steam bağlantı hatası: {res.status_code}"))
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Hata", f"Steam trendleri çekilemedi: {e}"))
+
+    def stop_scan(self):
+        if self.is_scanning:
+            self.stop_requested = True
+            self.scan_status_label.configure(text="⏹️ Durdurma isteği alındı, mevcut eşyadan sonra duracak...")
+
+    def start_batch_scan(self, raw_items, scan_wears=False):
+        if self.is_scanning:
+            return
         self.is_scanning = True
+        self.stop_requested = False
         self.scan_btn.configure(state="disabled", text="⏳ Taranıyor...")
+        self.stop_btn.configure(state="normal")
         self.progress_bar.pack(fill="x", padx=10, pady=(0, 5))
         self.progress_bar.start()
 
-        # Eski sonuçları temizle
         for widget in self.results_scroll.winfo_children():
             widget.destroy()
 
-        scan_wears = bool(self.wear_checkbox.get())
-        threading.Thread(target=self._run_scan_thread, args=(item_text, scan_wears), daemon=True).start()
+        threading.Thread(target=self._run_batch_thread, args=(raw_items, scan_wears), daemon=True).start()
 
-    def _run_scan_thread(self, user_input, scan_wears):
-        base_name = self.format_item_name(user_input)
+    def _run_batch_thread(self, raw_items, scan_wears):
         wear_levels = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
-        items_to_scan = [base_name] if (not scan_wears or "|" not in base_name) else [f"{base_name} ({w})" for w in wear_levels]
+        full_scan_list = []
 
-        total = len(items_to_scan)
-        for idx, esya in enumerate(items_to_scan, 1):
+        for raw in raw_items:
+            base_name = self.format_item_name(raw)
+            if scan_wears and "|" in base_name and not any(f"({w})" in base_name for w in wear_levels):
+                for w in wear_levels:
+                    full_scan_list.append(f"{base_name} ({w})")
+            else:
+                full_scan_list.append(base_name)
+
+        total = len(full_scan_list)
+        for idx, esya in enumerate(full_scan_list, 1):
+            if self.stop_requested:
+                self.after(0, lambda: self.scan_status_label.configure(text="⏹️ Tarama kullanıcı tarafından durduruldu."))
+                break
+
             self.after(0, lambda e=esya, i=idx, t=total: self.scan_status_label.configure(
                 text=f"[{i}/{t}] {e} çekiliyor..."
             ))
@@ -339,35 +478,34 @@ class CS2MarketApp(ctk.CTk):
 
     def _add_result_card(self, esya, fiyat_str, hacim_str, curr_price, prev_price, prev_time, saved):
         card = ctk.CTkFrame(self.results_scroll, fg_color="#24273a", corner_radius=8)
-        card.pack(fill="x", padx=10, pady=6)
+        card.pack(fill="x", padx=10, pady=5)
 
         left_frame = ctk.CTkFrame(card, fg_color="transparent")
-        left_frame.pack(side="left", padx=15, pady=10)
+        left_frame.pack(side="left", padx=15, pady=8)
 
-        name_label = ctk.CTkLabel(left_frame, text=esya, font=ctk.CTkFont(size=15, weight="bold"), text_color="#ffffff")
+        name_label = ctk.CTkLabel(left_frame, text=esya, font=ctk.CTkFont(size=14, weight="bold"), text_color="#ffffff")
         name_label.pack(anchor="w")
 
         hacim_display = f"24s Hacim: {hacim_str}" if hacim_str else "Hacim: Yok"
-        detail_label = ctk.CTkLabel(left_frame, text=hacim_display, font=ctk.CTkFont(size=12), text_color="#a5adcb")
+        detail_label = ctk.CTkLabel(left_frame, text=hacim_display, font=ctk.CTkFont(size=11), text_color="#a5adcb")
         detail_label.pack(anchor="w")
 
         right_frame = ctk.CTkFrame(card, fg_color="transparent")
-        right_frame.pack(side="right", padx=15, pady=10)
+        right_frame.pack(side="right", padx=15, pady=8)
 
-        price_label = ctk.CTkLabel(right_frame, text=f"{fiyat_str}", font=ctk.CTkFont(size=18, weight="bold"), text_color="#4cc9f0")
+        price_label = ctk.CTkLabel(right_frame, text=f"{fiyat_str}", font=ctk.CTkFont(size=17, weight="bold"), text_color="#4cc9f0")
         price_label.pack(anchor="e")
 
-        # Değişim Rozeti
         if prev_price is not None and curr_price is not None:
             fark = curr_price - prev_price
             if fark < -0.001:
                 yuzde = abs(fark / prev_price) * 100
                 badge_text = f"📉 %{yuzde:.2f} DÜŞTÜ (Önceki: ${prev_price:.2f})"
-                badge_color = "#2ecc71"  # Yeşil (Fırsat)
+                badge_color = "#2ecc71"
             elif fark > 0.001:
                 yuzde = (fark / prev_price) * 100
                 badge_text = f"📈 %{yuzde:.2f} ARTTI (Önceki: ${prev_price:.2f})"
-                badge_color = "#e74c3c"  # Kırmızı
+                badge_color = "#e74c3c"
             else:
                 badge_text = "➡️ Fiyat Sabit"
                 badge_color = "#95a5a6"
@@ -380,45 +518,185 @@ class CS2MarketApp(ctk.CTk):
 
     def _add_error_card(self, esya, err_msg):
         card = ctk.CTkFrame(self.results_scroll, fg_color="#2d1e2f", corner_radius=8)
-        card.pack(fill="x", padx=10, pady=6)
-        lbl = ctk.CTkLabel(card, text=f"❌ {esya} - {err_msg}", font=ctk.CTkFont(size=13), text_color="#e63946")
-        lbl.pack(padx=15, pady=10, anchor="w")
+        card.pack(fill="x", padx=10, pady=5)
+        lbl = ctk.CTkLabel(card, text=f"❌ {esya} - {err_msg}", font=ctk.CTkFont(size=12), text_color="#e63946")
+        lbl.pack(padx=15, pady=8, anchor="w")
 
     def _scan_finished(self):
         self.is_scanning = False
-        self.scan_btn.configure(state="normal", text="🚀 Fiyatı Tara & Kaydet")
+        self.stop_requested = False
+        self.scan_btn.configure(state="normal", text="🚀 Tara & Kaydet")
+        self.stop_btn.configure(state="disabled")
         self.progress_bar.stop()
         self.progress_bar.pack_forget()
         self.scan_status_label.configure(text="✅ Tarama tamamlandı ve Neon Bulut veritabanına kaydedildi.")
         self.refresh_database_table()
 
-    # ------------------ SEKME 2: NEON VERİTABANI TABLOSU ------------------
+    # ------------------ SEKME 2: TAKİP LİSTEM (PORTFÖY) ------------------
+    def setup_watchlist_tab(self):
+        add_bar = ctk.CTkFrame(self.tab_watchlist, fg_color="#2b2d42", corner_radius=10)
+        add_bar.pack(fill="x", padx=10, pady=10)
+
+        c = ctk.CTkFrame(add_bar, fg_color="transparent")
+        c.pack(fill="x", padx=15, pady=12)
+
+        self.wl_item_entry = ctk.CTkEntry(
+            c, placeholder_text="Takip etmek istediğiniz eşya (Örn: AWP Asiimov (Field-Tested))...",
+            height=38, font=ctk.CTkFont(size=13)
+        )
+        self.wl_item_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.wl_target_entry = ctk.CTkEntry(
+            c, placeholder_text="Hedef Fiyat $ (Opsiyonel)", width=160, height=38, font=ctk.CTkFont(size=13)
+        )
+        self.wl_target_entry.pack(side="left", padx=(0, 10))
+
+        add_btn = ctk.CTkButton(
+            c, text="➕ Listeme Ekle", height=38, width=130, font=ctk.CTkFont(weight="bold"),
+            command=self.add_to_watchlist
+        )
+        add_btn.pack(side="left")
+
+        btn_bar = ctk.CTkFrame(self.tab_watchlist, fg_color="transparent")
+        btn_bar.pack(fill="x", padx=10, pady=(0, 6))
+
+        scan_wl_btn = ctk.CTkButton(
+            btn_bar, text="🚀 Takip Listemdekileri Tara", height=36, fg_color="#3a0ca3", hover_color="#4361ee",
+            font=ctk.CTkFont(weight="bold"), command=self.scan_watchlist_items
+        )
+        scan_wl_btn.pack(side="left", padx=(0, 8))
+
+        del_btn = ctk.CTkButton(
+            btn_bar, text="🗑️ Seçileni Sil", height=36, width=120, fg_color="#d90429", hover_color="#ef233c",
+            command=self.delete_from_watchlist
+        )
+        del_btn.pack(side="left", padx=4)
+
+        refresh_wl_btn = ctk.CTkButton(
+            btn_bar, text="🔄 Yenile", height=36, width=100, command=self.refresh_watchlist_table
+        )
+        refresh_wl_btn.pack(side="left", padx=4)
+
+        self.wl_count_label = ctk.CTkLabel(btn_bar, text="", font=ctk.CTkFont(size=12), text_color="#8d99ae")
+        self.wl_count_label.pack(side="right", padx=10)
+
+        table_frame = ctk.CTkFrame(self.tab_watchlist, fg_color="#1e1e24", corner_radius=10)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+
+        columns = ("id", "esya", "hedef", "tarih")
+        self.wl_tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+
+        self.wl_tree.heading("id", text="ID")
+        self.wl_tree.heading("esya", text="Takip Edilen Eşya Adı")
+        self.wl_tree.heading("hedef", text="Hedef Fiyat ($)")
+        self.wl_tree.heading("tarih", text="Eklenme Tarihi")
+
+        self.wl_tree.column("id", width=50, anchor="center")
+        self.wl_tree.column("esya", width=480, anchor="w")
+        self.wl_tree.column("hedef", width=140, anchor="center")
+        self.wl_tree.column("tarih", width=180, anchor="center")
+
+        scrollbar_wl = ttk.Scrollbar(table_frame, orient="vertical", command=self.wl_tree.yview)
+        self.wl_tree.configure(yscrollcommand=scrollbar_wl.set)
+        scrollbar_wl.pack(side="right", fill="y")
+        self.wl_tree.pack(fill="both", expand=True, padx=5, pady=5)
+
+    def add_to_watchlist(self):
+        esya = self.wl_item_entry.get().strip()
+        if not esya:
+            messagebox.showwarning("Eksik", "Lütfen takip edilecek eşya adını yazın!")
+            return
+        target_str = self.wl_target_entry.get().strip().replace("$", "").replace(",", ".")
+        target_val = float(target_str) if target_str else None
+
+        try:
+            conn = self.get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO takip_listesi (esya, hedef_fiyat) 
+                    VALUES (%s, %s)
+                    ON CONFLICT (esya) DO UPDATE SET hedef_fiyat = EXCLUDED.hedef_fiyat;
+                """, (esya, target_val))
+                conn.commit()
+            conn.close()
+
+            self.wl_item_entry.delete(0, "end")
+            self.wl_target_entry.delete(0, "end")
+            self.refresh_watchlist_table()
+            messagebox.showinfo("Başarılı", f"'{esya}' takip listenize eklendi!")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Listeye eklenemedi: {e}")
+
+    def delete_from_watchlist(self):
+        selected = self.wl_tree.selection()
+        if not selected:
+            messagebox.showwarning("Seçim Yok", "Lütfen silmek istediğiniz eşyayı tablodan seçin!")
+            return
+        item_vals = self.wl_tree.item(selected[0])['values']
+        item_id = item_vals[0]
+
+        try:
+            conn = self.get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM takip_listesi WHERE id = %s;", (item_id,))
+                conn.commit()
+            conn.close()
+            self.refresh_watchlist_table()
+        except Exception as e:
+            messagebox.showerror("Hata", f"Silinemedi: {e}")
+
+    def refresh_watchlist_table(self):
+        threading.Thread(target=self._fetch_watchlist_thread, daemon=True).start()
+
+    def _fetch_watchlist_thread(self):
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT id, esya, hedef_fiyat, ekleme_tarihi FROM takip_listesi ORDER BY id DESC;")
+                rows = cur.fetchall()
+            conn.close()
+
+            self.after(0, lambda: self._update_wl_tree(rows))
+        except Exception as e:
+            print("Takip Listesi Çekme Hatası:", e)
+
+    def _update_wl_tree(self, rows):
+        self.wl_tree.delete(*self.wl_tree.get_children())
+        for r in rows:
+            t_str = f"${r['hedef_fiyat']:.2f}" if r['hedef_fiyat'] else "-"
+            dt_str = r['ekleme_tarihi'].strftime('%d.%m.%Y %H:%M') if r['ekleme_tarihi'] else "-"
+            self.wl_tree.insert("", "end", values=(r['id'], r['esya'], t_str, dt_str))
+        self.wl_count_label.configure(text=f"Takip Edilen: {len(rows)} eşya")
+
+    def scan_watchlist_items(self):
+        items = [self.wl_tree.item(child)['values'][1] for child in self.wl_tree.get_children()]
+        if not items:
+            messagebox.showinfo("Liste Boş", "Takip listenizde henüz taranacak eşya bulunmuyor. Önce yukarıdan eşya ekleyin!")
+            return
+        self.tabview.set("🔍 Eşya Tarama & Paketler")
+        self.start_batch_scan(items, scan_wears=False)
+
+    # ------------------ SEKME 3: NEON VERİTABANI TABLOSU ------------------
     def setup_database_tab(self):
         top_bar = ctk.CTkFrame(self.tab_database, fg_color="transparent")
         top_bar.pack(fill="x", padx=10, pady=(10, 5))
 
         self.table_search_entry = ctk.CTkEntry(
-            top_bar,
-            placeholder_text="Eşya adıyla filtrele...",
-            width=300,
-            height=36
+            top_bar, placeholder_text="Eşya adıyla anlık filtrele...", width=320, height=36
         )
         self.table_search_entry.pack(side="left", padx=(0, 10))
         self.table_search_entry.bind("<KeyRelease>", lambda e: self.filter_table())
 
         refresh_btn = ctk.CTkButton(
-            top_bar,
-            text="🔄 Yenile",
-            width=100,
-            height=36,
-            command=self.refresh_database_table
+            top_bar, text="🔄 Yenile", width=100, height=36, command=self.refresh_database_table
         )
         refresh_btn.pack(side="left", padx=5)
 
         self.table_count_label = ctk.CTkLabel(top_bar, text="", font=ctk.CTkFont(size=13), text_color="#8d99ae")
         self.table_count_label.pack(side="right", padx=10)
 
-        # Ağaç Tablosu (Treeview)
         table_frame = ctk.CTkFrame(self.tab_database, fg_color="#1e1e24", corner_radius=10)
         table_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -431,7 +709,7 @@ class CS2MarketApp(ctk.CTk):
         self.tree.heading("max", text="Maks ($)")
         self.tree.heading("hacim", text="24s Hacim")
         self.tree.heading("zaman", text="Son Güncelleme")
-        self.tree.heading("tarama", text="Kayıt")
+        self.tree.heading("tarama", text="Tarama")
 
         self.tree.column("esya", width=340, anchor="w")
         self.tree.column("guncel", width=100, anchor="center")
@@ -441,7 +719,6 @@ class CS2MarketApp(ctk.CTk):
         self.tree.column("zaman", width=150, anchor="center")
         self.tree.column("tarama", width=80, anchor="center")
 
-        # Treeview Koyu Tema Stili
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(
@@ -460,7 +737,6 @@ class CS2MarketApp(ctk.CTk):
         )
         style.map("Treeview", background=[('selected', '#3b82f6')])
 
-        # Scrollbar
         scrollbar_y = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar_y.set)
         scrollbar_y.pack(side="right", fill="y")
@@ -542,35 +818,28 @@ class CS2MarketApp(ctk.CTk):
                 f"{r['kayit_adet']} kez"
             ))
 
-        self.table_count_label.configure(text=f"Listelenen Eşya: {filtered_count}")
+        self.table_count_label.configure(text=f"Listelenen: {filtered_count} eşya")
 
-    # ------------------ SEKME 3: PİYASA ANALİZLERİ ------------------
+    # ------------------ SEKME 4: PİYASA ANALİZLERİ ------------------
     def setup_analytics_tab(self):
         control_bar = ctk.CTkFrame(self.tab_analytics, fg_color="transparent")
         control_bar.pack(fill="x", padx=10, pady=(10, 5))
 
         anomali_btn = ctk.CTkButton(
-            control_bar,
-            text="🧠 Aşınma & Arbitraj Analizi Yap",
-            font=ctk.CTkFont(weight="bold"),
+            control_bar, text="🧠 Aşınma & Arbitraj Analizi Yap", font=ctk.CTkFont(weight="bold"),
             command=self.run_anomali_analysis
         )
         anomali_btn.pack(side="left", padx=(0, 10))
 
         likidite_btn = ctk.CTkButton(
-            control_bar,
-            text="💧 Likidite & Risk Analizi Yap",
-            font=ctk.CTkFont(weight="bold"),
+            control_bar, text="💧 Likidite & Risk Analizi Yap", font=ctk.CTkFont(weight="bold"),
             command=self.run_likidite_analysis
         )
         likidite_btn.pack(side="left", padx=5)
 
-        # Analiz Sonuç Kutusu
         self.analytics_textbox = ctk.CTkTextbox(
-            self.tab_analytics,
-            font=ctk.CTkFont(family="Consolas", size=13),
-            fg_color="#1e1e24",
-            corner_radius=10
+            self.tab_analytics, font=ctk.CTkFont(family="Consolas", size=13),
+            fg_color="#1e1e24", corner_radius=10
         )
         self.analytics_textbox.pack(fill="both", expand=True, padx=10, pady=10)
         self.analytics_textbox.insert("1.0", "Yukarıdaki butonlara basarak veritabanınızdaki pazar analizlerini anında çalıştırabilirsiniz.\n\n"
@@ -581,21 +850,12 @@ class CS2MarketApp(ctk.CTk):
         threading.Thread(target=self._anomali_thread, daemon=True).start()
 
     def _anomali_thread(self):
-        wear_order = {
-            "Factory New": 1,
-            "Minimal Wear": 2,
-            "Field-Tested": 3,
-            "Well-Worn": 4,
-            "Battle-Scarred": 5
-        }
+        wear_order = {"Factory New": 1, "Minimal Wear": 2, "Field-Tested": 3, "Well-Worn": 4, "Battle-Scarred": 5}
         try:
             conn = self.get_db_connection()
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT DISTINCT ON (esya)
-                        esya,
-                        fiyat_sayisal,
-                        hacim_sayisal
+                    SELECT DISTINCT ON (esya) esya, fiyat_sayisal, hacim_sayisal
                     FROM pazar_verileri
                     WHERE fiyat_sayisal IS NOT NULL AND esya LIKE '%(%)%'
                     ORDER BY esya, id DESC;
@@ -611,10 +871,7 @@ class CS2MarketApp(ctk.CTk):
                     w = m.group(2)
                     if skin not in gruplar:
                         gruplar[skin] = {}
-                    gruplar[skin][w] = {
-                        'fiyat': float(r['fiyat_sayisal']),
-                        'hacim': r['hacim_sayisal']
-                    }
+                    gruplar[skin][w] = {'fiyat': float(r['fiyat_sayisal']), 'hacim': r['hacim_sayisal']}
 
             out = ["═" * 70, "🧠 AŞINMA SEVİYESİ & FİYAT ANOMALİ / ARBİTRAJ ANALİZİ", "═" * 70, ""]
             anomali_var = False
@@ -644,8 +901,7 @@ class CS2MarketApp(ctk.CTk):
             if not anomali_var:
                 out.append("✅ Tüm aşınma sıralamaları piyasa normlarına uygun görünüyor.")
 
-            text_result = "\n".join(out)
-            self.after(0, lambda: self._update_analytics_text(text_result))
+            self.after(0, lambda: self._update_analytics_text("\n".join(out)))
         except Exception as e:
             self.after(0, lambda: self._update_analytics_text(f"Hata oluştu: {e}"))
 
@@ -657,10 +913,7 @@ class CS2MarketApp(ctk.CTk):
             conn = self.get_db_connection()
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT DISTINCT ON (esya)
-                        esya,
-                        fiyat_sayisal,
-                        hacim_sayisal
+                    SELECT DISTINCT ON (esya) esya, fiyat_sayisal, hacim_sayisal
                     FROM pazar_verileri
                     WHERE hacim_sayisal IS NOT NULL
                     ORDER BY esya, id DESC;
@@ -685,8 +938,7 @@ class CS2MarketApp(ctk.CTk):
             for r in sorted(dusuk, key=lambda x: x['hacim_sayisal'], reverse=True):
                 out.append(f"   • {r['esya']:<36} | Hacim: {r['hacim_sayisal']:,} adet | Fiyat: ${r['fiyat_sayisal']}")
 
-            text_result = "\n".join(out)
-            self.after(0, lambda: self._update_analytics_text(text_result))
+            self.after(0, lambda: self._update_analytics_text("\n".join(out)))
         except Exception as e:
             self.after(0, lambda: self._update_analytics_text(f"Hata oluştu: {e}"))
 
@@ -698,4 +950,3 @@ class CS2MarketApp(ctk.CTk):
 if __name__ == "__main__":
     app = CS2MarketApp()
     app.mainloop()
-
