@@ -168,6 +168,7 @@ class CS2MarketApp(ctk.CTk):
         self.current_analytics_item = "AK-47 | Redline (Field-Tested)"
         self.selected_timeframe = "1M"
         self.timeframe_buttons = {}
+        self.theme_picker_buttons = {}
 
         # Otomatik takip değişkenleri
         self.auto_scan_active = self.settings.get("auto_scan_active", False)
@@ -348,8 +349,65 @@ class CS2MarketApp(ctk.CTk):
             print("DB Kayıt Hatası:", e)
             return False
 
+    # ------------------ TREEVIEW & TEMA STİLLERİ ------------------
+    def setup_treeview_styles(self):
+        self.tree_style = ttk.Style()
+        try:
+            self.tree_style.theme_use("clam")
+        except Exception:
+            pass
+
+        self.tree_style.configure(
+            "Treeview",
+            background="#141724",
+            foreground="#e2e8f0",
+            fieldbackground="#141724",
+            rowheight=32,
+            font=("Segoe UI", 10),
+            borderwidth=0
+        )
+
+        self.tree_style.configure(
+            "Treeview.Heading",
+            background="#1e2235",
+            foreground="#cad3f5",
+            font=("Segoe UI", 10, "bold"),
+            borderwidth=0,
+            relief="flat",
+            padding=(8, 8)
+        )
+
+        self.tree_style.map(
+            "Treeview",
+            background=[("selected", self.theme["primary"])],
+            foreground=[("selected", "#ffffff")]
+        )
+
+        self.tree_style.map(
+            "Treeview.Heading",
+            background=[("active", "#282e46")],
+            foreground=[("active", self.theme["accent"])]
+        )
+
+        self.tree_style.configure(
+            "Vertical.TScrollbar",
+            background="#1e2235",
+            troughcolor="#141724",
+            arrowcolor="#a5adcb",
+            bordercolor="#141724",
+            lightcolor="#1e2235",
+            darkcolor="#1e2235"
+        )
+
+    def _apply_tree_tags(self, tree):
+        if tree:
+            tree.tag_configure("odd", background="#141724", foreground="#e2e8f0")
+            tree.tag_configure("even", background="#1b1f31", foreground="#e2e8f0")
+
     # ------------------ ARAYÜZ (UI) TASARIMI ------------------
     def build_ui(self):
+        self.setup_treeview_styles()
+
         # ÜST BAŞLIK BARI
         header_frame = ctk.CTkFrame(self, fg_color="#131620", corner_radius=0, height=65)
         header_frame.pack(fill="x", side="top")
@@ -382,7 +440,15 @@ class CS2MarketApp(ctk.CTk):
         self.status_badge.pack(side="right", padx=25, pady=15)
 
         # Sekmeli Görünüm (Tabview) - 6 TANE SEKME
-        self.tabview = ctk.CTkTabview(self, corner_radius=12)
+        self.tabview = ctk.CTkTabview(
+            self, 
+            corner_radius=12,
+            segmented_button_selected_color=self.theme["primary"],
+            segmented_button_selected_hover_color=self.theme["hover"],
+            segmented_button_unselected_color="#181a26",
+            segmented_button_unselected_hover_color="#222536",
+            text_color="#ffffff"
+        )
         self.tabview.pack(fill="both", expand=True, padx=20, pady=(12, 18))
 
         self.tab_scan = self.tabview.add("🔍 Eşya Tarama & Paketler")
@@ -517,12 +583,12 @@ class CS2MarketApp(ctk.CTk):
         )
         self.cat_limit_combobox.pack(side="left", padx=3)
 
-        btn_cat_scan = ctk.CTkButton(
+        self.btn_cat_scan = ctk.CTkButton(
             row2, text="🚀 Kategoriyi Tara", height=30, width=130, fg_color=self.theme["primary"],
             hover_color=self.theme["hover"], font=ctk.CTkFont(size=12, weight="bold"),
             command=self.scan_selected_category
         )
-        btn_cat_scan.pack(side="left", padx=4)
+        self.btn_cat_scan.pack(side="left", padx=4)
 
         btn_sync_catalog = ctk.CTkButton(
             row2, text="🔄 Kataloğu Güncelle", height=30, width=140, fg_color="#343a40", hover_color="#495057",
@@ -549,6 +615,34 @@ class CS2MarketApp(ctk.CTk):
             label_font=ctk.CTkFont(size=14, weight="bold")
         )
         self.results_scroll.pack(fill="both", expand=True, padx=10, pady=(6, 10))
+        self._show_onboarding_card()
+
+    def _show_onboarding_card(self):
+        card = ctk.CTkFrame(self.results_scroll, fg_color="#181b26", corner_radius=12)
+        card.pack(fill="x", padx=15, pady=15)
+
+        title = ctk.CTkLabel(
+            card,
+            text="✨ CS2 Market Analyzer & Pro Dashboard'a Hoş Geldiniz!",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="#ffffff"
+        )
+        title.pack(anchor="w", padx=20, pady=(15, 8))
+
+        desc = ctk.CTkLabel(
+            card,
+            text=(
+                "• 🔍 Yukarıdaki arama kutusuna eşya adı yazıp 'Tara & Kaydet' ile anlık fiyatları çekebilirsiniz.\n"
+                "• ⚡ 'Hızlı Paketler' butonlarıyla popüler kasaları veya trend olan eşyaları tek tıkla listeleyebilirsiniz.\n"
+                "• 📈 'Fiyat Grafiği & Görsel' sekmesinden 20.663 eşyanın 1 Gün - 2 Yıl arası fiyat geçmişini inceleyebilirsiniz.\n"
+                "• 📌 'Takip Listem' sekmesinde portföyünüzü oluşturabilir ve Otomatik Düzenli Takip'i aktif edebilirsiniz.\n"
+                "• 🎨 'Görünüm & Kişiselleştirme' sekmesinden dilediğiniz canlı renk temasını seçebilirsiniz."
+            ),
+            font=ctk.CTkFont(size=12),
+            text_color="#cad3f5",
+            justify="left"
+        )
+        desc.pack(anchor="w", padx=20, pady=(0, 15))
 
     # ------------------ KATALOG OTOMATİK TAMAMLAMA ------------------
     def _on_search_key_release(self, event):
@@ -1078,6 +1172,7 @@ class CS2MarketApp(ctk.CTk):
         self.analytics_history_tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self.analytics_history_tree.pack(fill="both", expand=True, padx=4, pady=4)
+        self._apply_tree_tags(self.analytics_history_tree)
 
     # ------------------ ANALYTICS ARAMA VE ÖNERİLER ------------------
     def _on_analytics_search_key_release(self, event):
@@ -1311,12 +1406,13 @@ class CS2MarketApp(ctk.CTk):
         for item in self.analytics_history_tree.get_children():
             self.analytics_history_tree.delete(item)
 
-        for r in reversed(rows):
+        for i, r in enumerate(reversed(rows)):
             t_str = str(r.get('tarih') or '-')
             s_str = str(r.get('saat') or '-')
             p_str = f"${float(r['fiyat_sayisal']):.2f}" if r.get('fiyat_sayisal') is not None else str(r.get('fiyat') or '-')
             h_str = str(r.get('hacim') or '-')
-            self.analytics_history_tree.insert("", "end", values=(t_str, s_str, p_str, h_str))
+            tag = "even" if i % 2 == 0 else "odd"
+            self.analytics_history_tree.insert("", "end", values=(t_str, s_str, p_str, h_str), tags=(tag,))
 
     def refresh_analytics_live_price(self):
         item_name = self.current_analytics_item
@@ -1434,12 +1530,12 @@ class CS2MarketApp(ctk.CTk):
         )
         self.wl_target_entry.pack(side="left", padx=(0, 10))
 
-        add_btn = ctk.CTkButton(
+        self.wl_add_btn = ctk.CTkButton(
             c, text="➕ Listeme Ekle", height=38, width=130, font=ctk.CTkFont(weight="bold"),
             fg_color=self.theme["primary"], hover_color=self.theme["hover"],
             command=self.add_to_watchlist
         )
-        add_btn.pack(side="left")
+        self.wl_add_btn.pack(side="left")
 
         # Takip Listesi Katalog Öneri Paneli
         self.wl_suggestions_frame = ctk.CTkFrame(add_bar, fg_color="#181a24", corner_radius=8)
@@ -1447,11 +1543,11 @@ class CS2MarketApp(ctk.CTk):
         btn_bar = ctk.CTkFrame(self.tab_watchlist, fg_color="transparent")
         btn_bar.pack(fill="x", padx=10, pady=(0, 6))
 
-        scan_wl_btn = ctk.CTkButton(
+        self.wl_scan_btn = ctk.CTkButton(
             btn_bar, text="🚀 Takip Listemdekileri Tara", height=36, fg_color=self.theme["primary"],
             hover_color=self.theme["hover"], font=ctk.CTkFont(weight="bold"), command=self.scan_watchlist_items
         )
-        scan_wl_btn.pack(side="left", padx=(0, 8))
+        self.wl_scan_btn.pack(side="left", padx=(0, 8))
 
         chart_wl_btn = ctk.CTkButton(
             btn_bar, text="📈 Grafiği & Görseli Gör", height=36, fg_color="#00b4d8", hover_color="#0096c7",
@@ -1532,6 +1628,7 @@ class CS2MarketApp(ctk.CTk):
         self.wl_tree.configure(yscrollcommand=scrollbar_wl.set)
         scrollbar_wl.pack(side="right", fill="y")
         self.wl_tree.pack(fill="both", expand=True, padx=5, pady=5)
+        self._apply_tree_tags(self.wl_tree)
         self.wl_tree.bind("<Double-1>", lambda e: self.open_selected_wl_in_analytics())
 
     def add_to_watchlist(self):
@@ -1656,10 +1753,11 @@ class CS2MarketApp(ctk.CTk):
                 rows = cur.fetchall()
             conn.close()
 
-            for r in rows:
+            for i, r in enumerate(rows):
                 hedef_str = f"${r['hedef_fiyat']:.2f}" if r['hedef_fiyat'] else "-"
                 tarih_str = r['ekleme_tarihi'].strftime("%Y-%m-%d %H:%M") if r['ekleme_tarihi'] else "-"
-                self.wl_tree.insert("", "end", values=(r['id'], r['esya'], hedef_str, tarih_str))
+                tag = "even" if i % 2 == 0 else "odd"
+                self.wl_tree.insert("", "end", values=(r['id'], r['esya'], hedef_str, tarih_str), tags=(tag,))
 
             self.wl_count_label.configure(text=f"Takip Edilen: {len(rows)} Eşya")
         except Exception as e:
@@ -1849,11 +1947,11 @@ class CS2MarketApp(ctk.CTk):
         )
         self.catalog_cat_filter.pack(side="left", padx=(0, 10))
 
-        btn_filter = ctk.CTkButton(
+        self.catalog_filter_btn = ctk.CTkButton(
             f_inner, text="🔍 Filtrele", width=90, height=38, fg_color=self.theme["primary"],
             hover_color=self.theme["hover"], command=self.filter_catalog_table
         )
-        btn_filter.pack(side="left")
+        self.catalog_filter_btn.pack(side="left")
 
         # Tablo Alanı
         table_frame = ctk.CTkFrame(self.tab_catalog, fg_color="#181924", corner_radius=10)
@@ -1876,6 +1974,7 @@ class CS2MarketApp(ctk.CTk):
         self.catalog_tree.configure(yscrollcommand=scrollbar_cat.set)
         scrollbar_cat.pack(side="right", fill="y")
         self.catalog_tree.pack(fill="both", expand=True, padx=5, pady=5)
+        self._apply_tree_tags(self.catalog_tree)
         self.catalog_tree.bind("<Double-1>", lambda e: self.open_selected_catalog_in_analytics())
 
         # Alt Buton Çubuğu
@@ -1889,12 +1988,12 @@ class CS2MarketApp(ctk.CTk):
         )
         btn_view_analytics.pack(side="left", padx=(0, 6))
 
-        btn_scan_selected = ctk.CTkButton(
+        self.catalog_scan_btn = ctk.CTkButton(
             act_bar, text="🚀 Seçilenin Canlı Fiyatını Çek & Kaydet", height=36,
             fg_color=self.theme["primary"], hover_color=self.theme["hover"], font=ctk.CTkFont(weight="bold"),
             command=self.scan_selected_catalog_item
         )
-        btn_scan_selected.pack(side="left", padx=4)
+        self.catalog_scan_btn.pack(side="left", padx=4)
 
         btn_add_to_wl = ctk.CTkButton(
             act_bar, text="⭐ Takip Listeme Ekle", height=36,
@@ -1925,13 +2024,14 @@ class CS2MarketApp(ctk.CTk):
         for item in self.catalog_tree.get_children():
             self.catalog_tree.delete(item)
 
-        for r in rows:
+        for i, r in enumerate(rows):
+            tag = "even" if i % 2 == 0 else "odd"
             self.catalog_tree.insert("", "end", values=(
                 r['esya_adi'],
                 r['kategori'],
                 r['alt_kategori'] or '-',
                 r['silah'] or '-'
-            ))
+            ), tags=(tag,))
 
         self.catalog_count_lbl.configure(text=f"Listelenen: {len(rows)} / Toplam Eşleşen: {count:,}")
 
@@ -2033,6 +2133,7 @@ class CS2MarketApp(ctk.CTk):
         self.tree.configure(yscrollcommand=scrollbar_y.set)
         scrollbar_y.pack(side="right", fill="y")
         self.tree.pack(fill="both", expand=True, padx=5, pady=5)
+        self._apply_tree_tags(self.tree)
         self.tree.bind("<Double-1>", lambda e: self.open_selected_db_in_analytics())
 
         # Analiz Sonuç Kutusu (Gerektiğinde açılır)
@@ -2104,12 +2205,13 @@ class CS2MarketApp(ctk.CTk):
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        for r in rows:
+        for i, r in enumerate(rows):
             fiyat_str = f"${r['son_fiyat']:.2f}" if r['son_fiyat'] is not None else "-"
             min_str = f"${r['min_fiyat']:.2f}" if r['min_fiyat'] is not None else "-"
             max_str = f"${r['max_fiyat']:.2f}" if r['max_fiyat'] is not None else "-"
             hacim_str = f"{r['son_hacim']:,}" if r['son_hacim'] is not None else "Yok"
             zaman_str = r['son_tarih'].strftime("%Y-%m-%d %H:%M") if r['son_tarih'] else "-"
+            tag = "even" if i % 2 == 0 else "odd"
 
             self.tree.insert("", "end", values=(
                 r['esya'],
@@ -2119,7 +2221,7 @@ class CS2MarketApp(ctk.CTk):
                 hacim_str,
                 zaman_str,
                 f"{r['kayit_adet']} kez"
-            ))
+            ), tags=(tag,))
 
         self.table_count_label.configure(text=f"Listelenen Eşya: {len(rows)}")
 
@@ -2252,9 +2354,10 @@ class CS2MarketApp(ctk.CTk):
             ("🔴 Crimson Web", "Crimson Web", "#ef4444")
         ]
 
+        self.theme_picker_buttons = {}
         for label_text, t_key, col in theme_list:
             is_active = (t_key == self.active_theme_name)
-            border_w = 2 if is_active else 0
+            border_w = 3 if is_active else 0
             btn = ctk.CTkButton(
                 theme_buttons_frame,
                 text=label_text,
@@ -2267,6 +2370,7 @@ class CS2MarketApp(ctk.CTk):
                 command=lambda k=t_key: self.change_accent_theme(k)
             )
             btn.pack(side="left", padx=5, expand=True, fill="x")
+            self.theme_picker_buttons[t_key] = btn
 
         # Kart 2: Görünüm Modu (Koyu / Açık)
         mode_card = ctk.CTkFrame(container, fg_color=self.theme["card_bg"], corner_radius=12)
@@ -2302,11 +2406,11 @@ class CS2MarketApp(ctk.CTk):
         )
         self.db_info_label.pack(anchor="w", padx=20, pady=(0, 12))
 
-        btn_test_db = ctk.CTkButton(
+        self.btn_test_db = ctk.CTkButton(
             db_card, text="🔄 Veritabanı Durumunu Yeniden Kontrol Et", width=250, height=36,
             fg_color=self.theme["primary"], hover_color=self.theme["hover"], command=self.check_initial_db_status
         )
-        btn_test_db.pack(anchor="w", padx=20, pady=(0, 18))
+        self.btn_test_db.pack(anchor="w", padx=20, pady=(0, 18))
 
     def change_accent_theme(self, theme_name):
         if theme_name in THEMES:
@@ -2315,12 +2419,61 @@ class CS2MarketApp(ctk.CTk):
             self.settings["accent_theme"] = theme_name
             save_settings(self.settings)
 
-            # Temayı güncelle
-            self.theme_indicator.configure(text=f"  🎨 {self.active_theme_name}", text_color=self.theme["accent"])
-            self.scan_btn.configure(fg_color=self.theme["primary"], hover_color=self.theme["hover"])
+            # 1. Başlık çubuğu göstergesi
+            if hasattr(self, 'theme_indicator'):
+                self.theme_indicator.configure(text=f"  🎨 {self.active_theme_name}", text_color=self.theme["accent"])
+
+            # 2. CTkTabview sekme butonları
+            if hasattr(self, 'tabview'):
+                self.tabview.configure(
+                    segmented_button_selected_color=self.theme["primary"],
+                    segmented_button_selected_hover_color=self.theme["hover"]
+                )
+
+            # 3. Treeview seçili satır & başlık hover rengi
+            if hasattr(self, 'tree_style'):
+                self.tree_style.map(
+                    "Treeview",
+                    background=[("selected", self.theme["primary"])],
+                    foreground=[("selected", "#ffffff")]
+                )
+                self.tree_style.map(
+                    "Treeview.Heading",
+                    foreground=[("active", self.theme["accent"])]
+                )
+
+            # 4. Aksiyon butonları
+            for btn_attr in ['scan_btn', 'btn_cat_scan', 'analytics_btn_update', 'wl_add_btn', 'wl_scan_btn', 'catalog_filter_btn', 'catalog_scan_btn', 'btn_test_db']:
+                btn = getattr(self, btn_attr, None)
+                if btn:
+                    try:
+                        btn.configure(fg_color=self.theme["primary"], hover_color=self.theme["hover"])
+                    except Exception:
+                        pass
+
+            # 5. Zaman aralığı butonları
+            if hasattr(self, 'timeframe_buttons') and hasattr(self, 'selected_timeframe'):
+                for tf_code, btn in self.timeframe_buttons.items():
+                    if tf_code == self.selected_timeframe:
+                        btn.configure(fg_color=self.theme["primary"], hover_color=self.theme["hover"])
+
+            # 6. Tema seçici butonların çerçeveleri
+            if hasattr(self, 'theme_picker_buttons'):
+                for k, btn in self.theme_picker_buttons.items():
+                    bw = 3 if k == theme_name else 0
+                    btn.configure(border_width=bw)
+
+            # 7. Vurgu metinleri & Sayaç
+            if hasattr(self, 'analytics_price_val'):
+                self.analytics_price_val.configure(text_color=self.theme["accent"])
+            if hasattr(self, 'auto_scan_countdown_lbl'):
+                self.auto_scan_countdown_lbl.configure(text_color=self.theme["accent"])
+
+            # 8. Açık olan grafiği yeni tema rengiyle tazele
             if hasattr(self, 'current_analytics_item') and self.current_analytics_item:
                 self.load_item_analytics(self.current_analytics_item)
-            messagebox.showinfo("Tema Güncellendi", f"Tema '{theme_name}' olarak değiştirildi ve kaydedildi!")
+
+            messagebox.showinfo("Tema Güncellendi", f"Tema '{theme_name}' olarak değiştirildi ve uygulandı!")
 
     def change_appearance_mode(self, mode):
         ctk.set_appearance_mode(mode)
