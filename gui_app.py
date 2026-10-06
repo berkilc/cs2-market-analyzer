@@ -13,7 +13,14 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import requests
+import webbrowser
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import katalog_yoneticisi as ky
+import gorsel_yonetici
+import grafik_yonetici
 
 # Windows konsolunda UTF-8 desteği
 if sys.platform == "win32":
@@ -156,6 +163,9 @@ class CS2MarketApp(ctk.CTk):
         self._search_timer = None
         self._wl_search_timer = None
         self._catalog_search_timer = None
+        self._analytics_search_timer = None
+        self.chart_canvas_widget = None
+        self.current_analytics_item = "AK-47 | Redline (Field-Tested)"
 
         self.db_link = os.getenv("DATABASE_URL")
 
@@ -218,6 +228,7 @@ class CS2MarketApp(ctk.CTk):
             self.after(0, self.refresh_database_table)
             self.after(0, self.refresh_watchlist_table)
             self.after(0, self.filter_catalog_table)
+            self.after(300, lambda: self.load_item_analytics(self.current_analytics_item))
         except Exception as e:
             self.after(0, lambda: self.status_badge.configure(
                 text="🔴 Neon Bağlantı Hatası", text_color="#e74c3c"
@@ -359,17 +370,19 @@ class CS2MarketApp(ctk.CTk):
         )
         self.status_badge.pack(side="right", padx=25, pady=15)
 
-        # Sekmeli Görünüm (Tabview) - 5 TANE SEKME
+        # Sekmeli Görünüm (Tabview) - 6 TANE SEKME
         self.tabview = ctk.CTkTabview(self, corner_radius=12)
         self.tabview.pack(fill="both", expand=True, padx=20, pady=(12, 18))
 
         self.tab_scan = self.tabview.add("🔍 Eşya Tarama & Paketler")
+        self.tab_analytics = self.tabview.add("📈 Fiyat Grafiği & Görsel")
         self.tab_watchlist = self.tabview.add("📌 Takip Listem (Portföy)")
         self.tab_catalog = self.tabview.add("📚 CS2 Eşya Kataloğu (20.663)")
         self.tab_database = self.tabview.add("📋 Pazar Tablosu & Analizler")
         self.tab_settings = self.tabview.add("🎨 Görünüm & Kişiselleştirme")
 
         self.setup_scan_tab()
+        self.setup_analytics_tab()
         self.setup_watchlist_tab()
         self.setup_catalog_tab()
         self.setup_database_tab()
@@ -754,8 +767,21 @@ class CS2MarketApp(ctk.CTk):
         card = ctk.CTkFrame(self.results_scroll, fg_color=self.theme["card_bg"], corner_radius=8)
         card.pack(fill="x", padx=10, pady=5)
 
+        # Minik Görsel Önizleme
+        thumb_label = ctk.CTkLabel(card, text="", width=60, height=45)
+        thumb_label.pack(side="left", padx=(10, 0), pady=6)
+        
+        g_url = gorsel_yonetici.esya_gorsel_url_bul(esya)
+        if g_url:
+            gorsel_yonetici.gorsel_getir_async(
+                g_url, (60, 45),
+                lambda img, lbl=thumb_label: self.after(0, lambda: lbl.configure(image=img))
+            )
+        else:
+            thumb_label.configure(image=gorsel_yonetici.varsayilan_placeholder((60, 45)))
+
         left_frame = ctk.CTkFrame(card, fg_color="transparent")
-        left_frame.pack(side="left", padx=15, pady=8)
+        left_frame.pack(side="left", padx=12, pady=8)
 
         name_label = ctk.CTkLabel(left_frame, text=esya, font=ctk.CTkFont(size=14, weight="bold"), text_color="#ffffff")
         name_label.pack(anchor="w")
@@ -766,6 +792,14 @@ class CS2MarketApp(ctk.CTk):
 
         right_frame = ctk.CTkFrame(card, fg_color="transparent")
         right_frame.pack(side="right", padx=15, pady=8)
+
+        # Grafik Butonu
+        chart_btn = ctk.CTkButton(
+            right_frame, text="📈 Grafik", width=70, height=28,
+            font=ctk.CTkFont(size=11, weight="bold"), fg_color="#202434", hover_color=self.theme["primary"],
+            command=lambda n=esya: self.open_analytics_for_item(n)
+        )
+        chart_btn.pack(side="right", padx=(10, 0), pady=4)
 
         price_label = ctk.CTkLabel(right_frame, text=f"{fiyat_str}", font=ctk.CTkFont(size=17, weight="bold"), text_color=self.theme["accent"])
         price_label.pack(anchor="e")
@@ -806,7 +840,526 @@ class CS2MarketApp(ctk.CTk):
         self.scan_status_label.configure(text="✅ Tarama tamamlandı ve Neon Bulut veritabanına kaydedildi.")
         self.refresh_database_table()
 
-    # ------------------ SEKME 2: TAKİP LİSTEM (PORTFÖY) ------------------
+    # ------------------ SEKME 2: FİYAT GRAFİĞİ & GÖRSEL (ANALYTICS) ------------------
+    def setup_analytics_tab(self):
+        # 1. ÜST ARAMA VE HIZLI SEÇİM ÇUBUĞU
+        top_bar = ctk.CTkFrame(self.tab_analytics, fg_color=self.theme["card_bg"], corner_radius=10)
+        top_bar.pack(fill="x", padx=10, pady=(10, 6))
+
+        t_inner = ctk.CTkFrame(top_bar, fg_color="transparent")
+        t_inner.pack(fill="x", padx=15, pady=10)
+
+        self.analytics_search_entry = ctk.CTkEntry(
+            t_inner,
+            placeholder_text="Fotoğrafını ve fiyat grafiğini görmek istediğiniz eşyayı yazın (Örn: AK-47 | Redline, AWP | Asiimov)...",
+            height=40,
+            font=ctk.CTkFont(size=13)
+        )
+        self.analytics_search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.analytics_search_entry.bind("<Return>", lambda e: self.do_analytics_search())
+        self.analytics_search_entry.bind("<KeyRelease>", self._on_analytics_search_key_release)
+
+        btn_inspect = ctk.CTkButton(
+            t_inner, text="🔍 İncele & Çiz", width=120, height=40,
+            fg_color=self.theme["primary"], hover_color=self.theme["hover"],
+            font=ctk.CTkFont(weight="bold"), command=self.do_analytics_search
+        )
+        btn_inspect.pack(side="left", padx=(0, 8))
+
+        # Hızlı Popüler Eşya Seçici
+        self.analytics_quick_combo = ctk.CTkComboBox(
+            t_inner,
+            values=[
+                "⚡ Popüler Eşyalar...",
+                "AK-47 | Redline (Field-Tested)",
+                "AWP | Asiimov (Field-Tested)",
+                "M4A1-S | Printstream (Field-Tested)",
+                "Desert Eagle | Printstream (Field-Tested)",
+                "Gallery Case",
+                "Kilowatt Case",
+                "Revolution Case",
+                "Dreams & Nightmares Case",
+                "2020 RMR Contenders"
+            ],
+            width=230,
+            height=40,
+            command=self._on_quick_combo_selected
+        )
+        self.analytics_quick_combo.pack(side="left", padx=(0, 8))
+
+        btn_detach = ctk.CTkButton(
+            t_inner, text="🪟 Ayrı Pencere", width=110, height=40,
+            fg_color="#343a40", hover_color="#495057",
+            font=ctk.CTkFont(size=12), command=self.open_detached_analytics_window
+        )
+        btn_detach.pack(side="left")
+
+        # Otomatik Tamamlama Kutusu
+        self.analytics_suggestions_frame = ctk.CTkFrame(top_bar, fg_color="#181a24", corner_radius=8)
+
+        # 2. ANA PANEL: SPLIT VIEW (SOL: GÖRSEL & DETAY | SAĞ: MATPLOTLIB GRAFİĞİ)
+        split_frame = ctk.CTkFrame(self.tab_analytics, fg_color="transparent")
+        split_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+
+        # SOL PANEL (Görsel ve Eşya Kartı)
+        left_panel = ctk.CTkFrame(split_frame, fg_color=self.theme["card_bg"], corner_radius=12, width=330)
+        left_panel.pack(side="left", fill="y", padx=(0, 10))
+        left_panel.pack_propagate(False)
+
+        # Görsel Alanı (Koyu çerçeve)
+        img_container = ctk.CTkFrame(left_panel, fg_color="#12141c", corner_radius=10, height=210)
+        img_container.pack(fill="x", padx=12, pady=(12, 8))
+        img_container.pack_propagate(False)
+
+        self.analytics_image_label = ctk.CTkLabel(
+            img_container, text="Görsel Yükleniyor...",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#8d99ae"
+        )
+        self.analytics_image_label.pack(expand=True, fill="both", padx=5, pady=5)
+
+        # Eşya Başlığı
+        self.analytics_title_label = ctk.CTkLabel(
+            left_panel, text="AK-47 | Redline (Field-Tested)",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color="#ffffff", wraplength=300, justify="center"
+        )
+        self.analytics_title_label.pack(fill="x", padx=10, pady=(4, 2))
+
+        # Kategori & Silah Bilgisi
+        self.analytics_cat_label = ctk.CTkLabel(
+            left_panel, text="Kategori: Tüfekler | Silah: AK-47",
+            font=ctk.CTkFont(size=11), text_color="#a5adcb"
+        )
+        self.analytics_cat_label.pack(fill="x", padx=10, pady=(0, 8))
+
+        # Fiyat & Hacim Kartı
+        price_card = ctk.CTkFrame(left_panel, fg_color="#181b26", corner_radius=8)
+        price_card.pack(fill="x", padx=12, pady=(0, 10))
+
+        self.analytics_price_val = ctk.CTkLabel(
+            price_card, text="$--.--",
+            font=ctk.CTkFont(size=22, weight="bold"),
+            text_color=self.theme["accent"]
+        )
+        self.analytics_price_val.pack(pady=(8, 2))
+
+        self.analytics_volume_val = ctk.CTkLabel(
+            price_card, text="24s Hacim: --",
+            font=ctk.CTkFont(size=12),
+            text_color="#cad3f5"
+        )
+        self.analytics_volume_val.pack(pady=(0, 8))
+
+        # Eylem Butonları
+        self.analytics_btn_update = ctk.CTkButton(
+            left_panel, text="🔄 Canlı Fiyatı Çek & Kaydet",
+            height=36, font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=self.theme["primary"], hover_color=self.theme["hover"],
+            command=self.refresh_analytics_live_price
+        )
+        self.analytics_btn_update.pack(fill="x", padx=12, pady=4)
+
+        btn_add_wl = ctk.CTkButton(
+            left_panel, text="📌 Takip Listeme Ekle",
+            height=34, font=ctk.CTkFont(size=12),
+            fg_color="#3a0ca3", hover_color="#4361ee",
+            command=self.add_current_analytics_to_watchlist
+        )
+        btn_add_wl.pack(fill="x", padx=12, pady=4)
+
+        btn_steam_open = ctk.CTkButton(
+            left_panel, text="🌐 Steam Pazarında Aç",
+            height=34, font=ctk.CTkFont(size=12),
+            fg_color="#1f2430", hover_color="#2b3242",
+            command=self.open_current_analytics_in_steam
+        )
+        btn_steam_open.pack(fill="x", padx=12, pady=4)
+
+        self.analytics_status_label = ctk.CTkLabel(
+            left_panel, text="", font=ctk.CTkFont(size=11),
+            text_color="#00d26a", wraplength=300
+        )
+        self.analytics_status_label.pack(fill="x", padx=10, pady=(6, 8))
+
+        # SAĞ PANEL (Fiyat Grafiği ve İstatistikler)
+        right_panel = ctk.CTkFrame(split_frame, fg_color="transparent")
+        right_panel.pack(side="right", fill="both", expand=True)
+
+        # 6'lı İstatistik Kartları Çubuğu
+        stats_bar = ctk.CTkFrame(right_panel, fg_color="transparent")
+        stats_bar.pack(fill="x", pady=(0, 8))
+
+        self.stat_widgets = {}
+        stat_configs = [
+            ("guncel", "🟢 Son Fiyat", "$0.00"),
+            ("zirve", "📈 En Yüksek", "$0.00"),
+            ("dip", "📉 En Düşük", "$0.00"),
+            ("ortalama", "⚖️ Ortalama", "$0.00"),
+            ("degisim", "📊 Net Değişim", "%0.00"),
+            ("kayit", "🕒 Kayıt Sayısı", "0")
+        ]
+
+        for key, title, def_val in stat_configs:
+            c = ctk.CTkFrame(stats_bar, fg_color=self.theme["card_bg"], corner_radius=8)
+            c.pack(side="left", fill="both", expand=True, padx=3)
+
+            l_t = ctk.CTkLabel(c, text=title, font=ctk.CTkFont(size=11), text_color="#8d99ae")
+            l_t.pack(pady=(6, 1))
+
+            l_v = ctk.CTkLabel(c, text=def_val, font=ctk.CTkFont(size=13, weight="bold"), text_color="#ffffff")
+            l_v.pack(pady=(0, 6))
+            self.stat_widgets[key] = l_v
+
+        # Grafik Alanı
+        self.chart_container = ctk.CTkFrame(right_panel, fg_color="#131620", corner_radius=10)
+        self.chart_container.pack(fill="both", expand=True, pady=(0, 8))
+
+        # Geçmiş Kayıt Tablosu
+        hist_frame = ctk.CTkFrame(right_panel, fg_color=self.theme["card_bg"], corner_radius=8, height=140)
+        hist_frame.pack(fill="x")
+        hist_frame.pack_propagate(False)
+
+        h_cols = ("tarih", "saat", "fiyat", "hacim")
+        self.analytics_history_tree = ttk.Treeview(hist_frame, columns=h_cols, show="headings", height=4)
+        self.analytics_history_tree.heading("tarih", text="Tarih")
+        self.analytics_history_tree.heading("saat", text="Saat")
+        self.analytics_history_tree.heading("fiyat", text="Fiyat ($)")
+        self.analytics_history_tree.heading("hacim", text="24s Hacim")
+
+        self.analytics_history_tree.column("tarih", width=120, anchor="center")
+        self.analytics_history_tree.column("saat", width=100, anchor="center")
+        self.analytics_history_tree.column("fiyat", width=120, anchor="center")
+        self.analytics_history_tree.column("hacim", width=140, anchor="center")
+
+        sb = ttk.Scrollbar(hist_frame, orient="vertical", command=self.analytics_history_tree.yview)
+        self.analytics_history_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.analytics_history_tree.pack(fill="both", expand=True, padx=4, pady=4)
+
+    # ------------------ ANALYTICS ARAMA VE ÖNERİLER ------------------
+    def _on_analytics_search_key_release(self, event):
+        if event.keysym in ("Return", "Up", "Down", "Escape"):
+            if event.keysym == "Escape":
+                self.analytics_suggestions_frame.pack_forget()
+            return
+        if self._analytics_search_timer:
+            self.after_cancel(self._analytics_search_timer)
+        self._analytics_search_timer = self.after(250, self._do_analytics_search_suggestions)
+
+    def _do_analytics_search_suggestions(self):
+        text = self.analytics_search_entry.get().strip()
+        if len(text) < 2:
+            self.analytics_suggestions_frame.pack_forget()
+            return
+        threading.Thread(target=self._fetch_analytics_suggestions_thread, args=(text,), daemon=True).start()
+
+    def _fetch_analytics_suggestions_thread(self, query):
+        results = ky.katalog_ara(query, limit=5)
+        self.after(0, lambda: self._show_analytics_suggestions(results))
+
+    def _show_analytics_suggestions(self, results):
+        for widget in self.analytics_suggestions_frame.winfo_children():
+            widget.destroy()
+
+        if not results:
+            self.analytics_suggestions_frame.pack_forget()
+            return
+
+        self.analytics_suggestions_frame.pack(fill="x", padx=15, pady=(0, 8))
+        header = ctk.CTkLabel(
+            self.analytics_suggestions_frame,
+            text="💡 Katalogdan Seçin:",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#8d99ae"
+        )
+        header.pack(anchor="w", padx=8, pady=(4, 2))
+
+        for item in results:
+            name = item['esya_adi']
+            cat = item.get('kategori', '')
+            btn = ctk.CTkButton(
+                self.analytics_suggestions_frame,
+                text=f"🎯 {name}  [{cat}]",
+                anchor="w",
+                height=26,
+                fg_color="#202434",
+                hover_color=self.theme["primary"],
+                font=ctk.CTkFont(size=12),
+                command=lambda n=name: self._select_analytics_suggestion(n)
+            )
+            btn.pack(fill="x", padx=6, pady=2)
+
+    def _select_analytics_suggestion(self, name):
+        self.analytics_search_entry.delete(0, 'end')
+        self.analytics_search_entry.insert(0, name)
+        self.analytics_suggestions_frame.pack_forget()
+        self.load_item_analytics(name)
+
+    def _on_quick_combo_selected(self, val):
+        if "Popüler Eşyalar" not in val:
+            self.load_item_analytics(val)
+
+    def do_analytics_search(self):
+        item_text = self.analytics_search_entry.get().strip()
+        if not item_text:
+            messagebox.showwarning("Eksik", "Lütfen incelenecek eşya adını girin!")
+            return
+        self.analytics_suggestions_frame.pack_forget()
+        self.load_item_analytics(item_text)
+
+    def open_analytics_for_item(self, item_name):
+        self.tabview.set("📈 Fiyat Grafiği & Görsel")
+        self.load_item_analytics(item_name)
+
+    def open_selected_catalog_in_analytics(self):
+        selected = self.catalog_tree.selection()
+        if not selected:
+            messagebox.showwarning("Seçim Yok", "Lütfen incelemek istediğiniz eşyayı tablodan seçin!")
+            return
+        row = self.catalog_tree.item(selected[0])['values']
+        item_name = row[0]
+        self.open_analytics_for_item(item_name)
+
+    def open_selected_wl_in_analytics(self):
+        selected = self.wl_tree.selection()
+        if not selected:
+            messagebox.showwarning("Seçim Yok", "Lütfen incelemek istediğiniz eşyayı tablodan seçin!")
+            return
+        row = self.wl_tree.item(selected[0])['values']
+        item_name = row[1]
+        self.open_analytics_for_item(item_name)
+
+    def open_selected_db_in_analytics(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Seçim Yok", "Lütfen incelemek istediğiniz eşyayı tablodan seçin!")
+            return
+        row = self.tree.item(selected[0])['values']
+        item_name = row[0]
+        self.open_analytics_for_item(item_name)
+
+    # ------------------ ANALYTICS VERİ VE GÖRSEL YÜKLEME ------------------
+    def load_item_analytics(self, item_name):
+        if not item_name or not item_name.strip():
+            return
+        self.current_analytics_item = item_name.strip()
+        if hasattr(self, 'analytics_search_entry'):
+            self.analytics_search_entry.delete(0, 'end')
+            self.analytics_search_entry.insert(0, self.current_analytics_item)
+            self.analytics_suggestions_frame.pack_forget()
+            self.analytics_title_label.configure(text=self.current_analytics_item)
+            self.analytics_status_label.configure(text="⏳ Veriler ve görsel yükleniyor...", text_color="#f39c12")
+
+        threading.Thread(target=self._load_item_analytics_thread, args=(self.current_analytics_item,), daemon=True).start()
+
+    def _load_item_analytics_thread(self, item_name):
+        # 1. Görsel URL'sini bul
+        img_url = gorsel_yonetici.esya_gorsel_url_bul(item_name)
+        if img_url:
+            def _on_img(img):
+                if hasattr(self, 'analytics_image_label'):
+                    self.after(0, lambda: self.analytics_image_label.configure(image=img, text=""))
+            gorsel_yonetici.gorsel_getir_async(img_url, (260, 195), _on_img)
+        else:
+            ph = gorsel_yonetici.varsayilan_placeholder((260, 195))
+            if hasattr(self, 'analytics_image_label'):
+                self.after(0, lambda: self.analytics_image_label.configure(image=ph, text="🖼️ Görsel Kataloğu Yok"))
+
+        # 2. Katalogdan silah ve kategori bilgisini çek
+        cat_info = "Kategori: CS2 Eşyası"
+        try:
+            conn = self.get_db_connection()
+            if conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT kategori, alt_kategori, silah FROM esya_katalogu WHERE esya_adi = %s LIMIT 1;", (item_name,))
+                    crow = cur.fetchone()
+                    if crow:
+                        k = crow.get('kategori') or 'Genel'
+                        s = crow.get('silah') or ''
+                        a = crow.get('alt_kategori') or ''
+                        parts = [p for p in [k, s, a] if p]
+                        cat_info = " | ".join(parts)
+                conn.close()
+        except Exception:
+            pass
+
+        if hasattr(self, 'analytics_cat_label'):
+            self.after(0, lambda: self.analytics_cat_label.configure(text=cat_info))
+
+        # 3. Fiyat geçmişini Neon DB'den al
+        rows = grafik_yonetici.esya_fiyat_gecmisi_al(item_name)
+        stats = grafik_yonetici.grafik_istatistikleri_hesapla(rows)
+
+        # 4. Figür oluştur
+        fig = grafik_yonetici.fiyat_grafigi_ciz(rows, item_name, tema_rengi=self.theme["accent"])
+
+        # 5. UI güncelle
+        self.after(0, lambda: self._apply_analytics_results(rows, stats, fig))
+
+    def _apply_analytics_results(self, rows, stats, fig):
+        if not hasattr(self, 'analytics_price_val'):
+            return
+
+        # Fiyat ve hacim kartı
+        if stats['guncel_fiyat'] > 0:
+            self.analytics_price_val.configure(text=f"${stats['guncel_fiyat']:.2f}")
+            self.analytics_volume_val.configure(text=f"24s Hacim: {stats['son_hacim']}")
+        else:
+            self.analytics_price_val.configure(text="$--.--")
+            self.analytics_volume_val.configure(text="Kayıt bulunamadı")
+
+        # Üst istatistik kartları
+        self.stat_widgets["guncel"].configure(text=f"${stats['guncel_fiyat']:.2f}" if stats['guncel_fiyat'] else "-")
+        self.stat_widgets["zirve"].configure(text=f"${stats['en_yuksek']:.2f}" if stats['en_yuksek'] else "-")
+        self.stat_widgets["dip"].configure(text=f"${stats['en_dusuk']:.2f}" if stats['en_dusuk'] else "-")
+        self.stat_widgets["ortalama"].configure(text=f"${stats['ortalama']:.2f}" if stats['ortalama'] else "-")
+
+        chg = stats['degisim_yuzde']
+        chg_color = "#2ecc71" if chg > 0 else ("#e74c3c" if chg < 0 else "#ffffff")
+        self.stat_widgets["degisim"].configure(text=f"%{chg:+.2f}", text_color=chg_color)
+        self.stat_widgets["kayit"].configure(text=str(stats['toplam_kayit']))
+
+        # Grafiği göm
+        self._embed_chart_figure(fig)
+
+        # Tabloyu doldur
+        self._fill_analytics_history_table(rows)
+
+        count = stats['toplam_kayit']
+        self.analytics_status_label.configure(
+            text=f"✅ {count} adet pazar kaydı analiz edildi." if count else "💡 Veritabanında kayıt yok. 'Canlı Fiyatı Çek' ile ilk veriyi ekleyebilirsiniz.",
+            text_color="#00d26a" if count else "#f39c12"
+        )
+
+    def _embed_chart_figure(self, fig):
+        if not hasattr(self, 'chart_container'):
+            return
+
+        if self.chart_canvas_widget:
+            try:
+                self.chart_canvas_widget.get_tk_widget().destroy()
+            except Exception:
+                pass
+            plt.close('all')
+
+        canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
+        canvas.draw()
+        widget = canvas.get_tk_widget()
+        widget.pack(fill="both", expand=True, padx=4, pady=4)
+        self.chart_canvas_widget = canvas
+
+    def _fill_analytics_history_table(self, rows):
+        if not hasattr(self, 'analytics_history_tree'):
+            return
+
+        for item in self.analytics_history_tree.get_children():
+            self.analytics_history_tree.delete(item)
+
+        for r in reversed(rows):
+            t_str = str(r.get('tarih') or '-')
+            s_str = str(r.get('saat') or '-')
+            p_str = f"${float(r['fiyat_sayisal']):.2f}" if r.get('fiyat_sayisal') is not None else str(r.get('fiyat') or '-')
+            h_str = str(r.get('hacim') or '-')
+            self.analytics_history_tree.insert("", "end", values=(t_str, s_str, p_str, h_str))
+
+    def refresh_analytics_live_price(self):
+        item_name = self.current_analytics_item
+        if not item_name:
+            return
+        self.analytics_status_label.configure(text="🌐 Steam pazarından güncel fiyat çekiliyor...", text_color="#f39c12")
+        self.analytics_btn_update.configure(state="disabled", text="⏳ Çekiliyor...")
+
+        def _thread():
+            fiyat_str, hacim_str = self.get_steam_price(item_name)
+            if fiyat_str:
+                self.save_price_to_db(item_name, fiyat_str, hacim_str)
+                self.after(0, lambda: self.analytics_status_label.configure(text="✅ Yeni fiyat kaydedildi, grafik yenileniyor...", text_color="#2ecc71"))
+                self.after(300, lambda: self.load_item_analytics(item_name))
+                self.after(300, self.refresh_database_table)
+            else:
+                self.after(0, lambda: self.analytics_status_label.configure(text=f"❌ Fiyat alınamadı: {hacim_str}", text_color="#e74c3c"))
+
+            self.after(0, lambda: self.analytics_btn_update.configure(state="normal", text="🔄 Canlı Fiyatı Çek & Kaydet"))
+
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def add_current_analytics_to_watchlist(self):
+        item_name = self.current_analytics_item
+        if not item_name:
+            return
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO takip_listesi (esya) 
+                    VALUES (%s)
+                    ON CONFLICT (esya) DO NOTHING;
+                """, (item_name,))
+                conn.commit()
+            conn.close()
+            self.refresh_watchlist_table()
+            messagebox.showinfo("Başarılı", f"'{item_name}' takip listenize eklendi!")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Listeye eklenemedi: {e}")
+
+    def open_current_analytics_in_steam(self):
+        item_name = self.current_analytics_item
+        if not item_name:
+            return
+        encoded = urllib.parse.quote(item_name)
+        url = f"https://steamcommunity.com/market/listings/730/{encoded}"
+        webbrowser.open(url)
+
+    def open_detached_analytics_window(self):
+        item_name = self.current_analytics_item
+        if not item_name:
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title(f"📈 {item_name} - Ayrı Grafik & Detay Penceresi")
+        win.geometry("880x620")
+        win.minsize(750, 500)
+
+        # Üst başlık ve bilgi
+        top_bar = ctk.CTkFrame(win, fg_color=self.theme["card_bg"], corner_radius=0, height=60)
+        top_bar.pack(fill="x")
+
+        lbl = ctk.CTkLabel(top_bar, text=f"🎮 {item_name}", font=ctk.CTkFont(size=16, weight="bold"))
+        lbl.pack(side="left", padx=20, pady=12)
+
+        # Ana içerik
+        content = ctk.CTkFrame(win, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=15, pady=15)
+
+        # Sol resim alanı
+        left = ctk.CTkFrame(content, fg_color=self.theme["card_bg"], corner_radius=10, width=280)
+        left.pack(side="left", fill="y", padx=(0, 10))
+        left.pack_propagate(False)
+
+        img_box = ctk.CTkLabel(left, text="Görsel Yükleniyor...", font=ctk.CTkFont(size=12))
+        img_box.pack(expand=True, fill="both", padx=10, pady=10)
+
+        img_url = gorsel_yonetici.esya_gorsel_url_bul(item_name)
+        if img_url:
+            gorsel_yonetici.gorsel_getir_async(img_url, (240, 180), lambda img: win.after(0, lambda: img_box.configure(image=img, text="")))
+        else:
+            img_box.configure(image=gorsel_yonetici.varsayilan_placeholder((240, 180)), text="Görsel Yok")
+
+        # Sağ grafik alanı
+        right = ctk.CTkFrame(content, fg_color="#131620", corner_radius=10)
+        right.pack(side="right", fill="both", expand=True)
+
+        rows = grafik_yonetici.esya_fiyat_gecmisi_al(item_name)
+        fig = grafik_yonetici.fiyat_grafigi_ciz(rows, item_name, tema_rengi=self.theme["accent"], figsize=(6.5, 4.2))
+
+        cv = FigureCanvasTkAgg(fig, master=right)
+        cv.draw()
+        cv.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
+
+    # ------------------ SEKME 3: TAKİP LİSTEM (PORTFÖY) ------------------
     def setup_watchlist_tab(self):
         add_bar = ctk.CTkFrame(self.tab_watchlist, fg_color=self.theme["card_bg"], corner_radius=10)
         add_bar.pack(fill="x", padx=10, pady=10)
@@ -845,6 +1398,12 @@ class CS2MarketApp(ctk.CTk):
         )
         scan_wl_btn.pack(side="left", padx=(0, 8))
 
+        chart_wl_btn = ctk.CTkButton(
+            btn_bar, text="📈 Grafiği & Görseli Gör", height=36, fg_color="#00b4d8", hover_color="#0096c7",
+            font=ctk.CTkFont(weight="bold"), command=self.open_selected_wl_in_analytics
+        )
+        chart_wl_btn.pack(side="left", padx=4)
+
         del_btn = ctk.CTkButton(
             btn_bar, text="🗑️ Seçileni Sil", height=36, width=120, fg_color="#d90429", hover_color="#ef233c",
             command=self.delete_from_watchlist
@@ -879,6 +1438,7 @@ class CS2MarketApp(ctk.CTk):
         self.wl_tree.configure(yscrollcommand=scrollbar_wl.set)
         scrollbar_wl.pack(side="right", fill="y")
         self.wl_tree.pack(fill="both", expand=True, padx=5, pady=5)
+        self.wl_tree.bind("<Double-1>", lambda e: self.open_selected_wl_in_analytics())
 
     def add_to_watchlist(self):
         esya = self.wl_item_entry.get().strip()
@@ -1096,17 +1656,25 @@ class CS2MarketApp(ctk.CTk):
         self.catalog_tree.configure(yscrollcommand=scrollbar_cat.set)
         scrollbar_cat.pack(side="right", fill="y")
         self.catalog_tree.pack(fill="both", expand=True, padx=5, pady=5)
+        self.catalog_tree.bind("<Double-1>", lambda e: self.open_selected_catalog_in_analytics())
 
         # Alt Buton Çubuğu
         act_bar = ctk.CTkFrame(self.tab_catalog, fg_color="transparent")
         act_bar.pack(fill="x", padx=10, pady=(0, 8))
+
+        btn_view_analytics = ctk.CTkButton(
+            act_bar, text="📈 Görsel & Fiyat Grafiği", height=36,
+            fg_color="#00b4d8", hover_color="#0096c7", font=ctk.CTkFont(weight="bold"),
+            command=self.open_selected_catalog_in_analytics
+        )
+        btn_view_analytics.pack(side="left", padx=(0, 6))
 
         btn_scan_selected = ctk.CTkButton(
             act_bar, text="🚀 Seçilenin Canlı Fiyatını Çek & Kaydet", height=36,
             fg_color=self.theme["primary"], hover_color=self.theme["hover"], font=ctk.CTkFont(weight="bold"),
             command=self.scan_selected_catalog_item
         )
-        btn_scan_selected.pack(side="left", padx=(0, 10))
+        btn_scan_selected.pack(side="left", padx=4)
 
         btn_add_to_wl = ctk.CTkButton(
             act_bar, text="⭐ Takip Listeme Ekle", height=36,
@@ -1209,6 +1777,12 @@ class CS2MarketApp(ctk.CTk):
         )
         likidite_btn.pack(side="left", padx=5)
 
+        chart_db_btn = ctk.CTkButton(
+            top_bar, text="📈 Grafiği Gör", height=36, fg_color="#00b4d8", hover_color="#0096c7",
+            font=ctk.CTkFont(weight="bold"), command=self.open_selected_db_in_analytics
+        )
+        chart_db_btn.pack(side="left", padx=5)
+
         self.table_count_label = ctk.CTkLabel(top_bar, text="", font=ctk.CTkFont(size=13), text_color="#8d99ae")
         self.table_count_label.pack(side="right", padx=10)
 
@@ -1239,6 +1813,7 @@ class CS2MarketApp(ctk.CTk):
         self.tree.configure(yscrollcommand=scrollbar_y.set)
         scrollbar_y.pack(side="right", fill="y")
         self.tree.pack(fill="both", expand=True, padx=5, pady=5)
+        self.tree.bind("<Double-1>", lambda e: self.open_selected_db_in_analytics())
 
         # Analiz Sonuç Kutusu (Gerektiğinde açılır)
         self.analytics_textbox = ctk.CTkTextbox(
@@ -1523,6 +2098,8 @@ class CS2MarketApp(ctk.CTk):
             # Temayı güncelle
             self.theme_indicator.configure(text=f"  🎨 {self.active_theme_name}", text_color=self.theme["accent"])
             self.scan_btn.configure(fg_color=self.theme["primary"], hover_color=self.theme["hover"])
+            if hasattr(self, 'current_analytics_item') and self.current_analytics_item:
+                self.load_item_analytics(self.current_analytics_item)
             messagebox.showinfo("Tema Güncellendi", f"Tema '{theme_name}' olarak değiştirildi ve kaydedildi!")
 
     def change_appearance_mode(self, mode):
