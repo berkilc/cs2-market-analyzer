@@ -11,3 +11,5 @@ __pycache__/
 build/
 dist/
 *.spec
+CS2_Market_Analyzer.exe
+scratch/
