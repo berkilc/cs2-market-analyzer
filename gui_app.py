@@ -166,10 +166,19 @@ class CS2MarketApp(ctk.CTk):
         self._analytics_search_timer = None
         self.chart_canvas_widget = None
         self.current_analytics_item = "AK-47 | Redline (Field-Tested)"
+        self.selected_timeframe = "1M"
+        self.timeframe_buttons = {}
+
+        # Otomatik takip değişkenleri
+        self.auto_scan_active = self.settings.get("auto_scan_active", False)
+        self.auto_scan_interval_minutes = int(self.settings.get("auto_scan_interval_minutes", 15))
+        self._auto_scan_thread = None
+        self._auto_scan_stop_event = threading.Event()
 
         self.db_link = os.getenv("DATABASE_URL")
 
         self.build_ui()
+        self.protocol("WM_DELETE_WINDOW", self.on_app_close)
         self.check_initial_db_status()
 
     # ------------------ VERİTABANI YARDIMCILARI ------------------
@@ -229,6 +238,8 @@ class CS2MarketApp(ctk.CTk):
             self.after(0, self.refresh_watchlist_table)
             self.after(0, self.filter_catalog_table)
             self.after(300, lambda: self.load_item_analytics(self.current_analytics_item))
+            if self.auto_scan_active:
+                self.after(2000, self._start_auto_tracker)
         except Exception as e:
             self.after(0, lambda: self.status_badge.configure(
                 text="🔴 Neon Bağlantı Hatası", text_color="#e74c3c"
@@ -1011,6 +1022,37 @@ class CS2MarketApp(ctk.CTk):
             l_v.pack(pady=(0, 6))
             self.stat_widgets[key] = l_v
 
+        # Zaman Aralığı Seçim Çubuğu (1 Gün, 1 Hafta, 1 Ay, 3 Ay, 6 Ay, 1 Yıl, 2 Yıl, Tümü)
+        tf_bar = ctk.CTkFrame(right_panel, fg_color=self.theme["card_bg"], corner_radius=8, height=36)
+        tf_bar.pack(fill="x", pady=(0, 6))
+
+        tf_lbl = ctk.CTkLabel(tf_bar, text="🕒 Zaman Aralığı:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#8d99ae")
+        tf_lbl.pack(side="left", padx=(12, 8), pady=4)
+
+        self.timeframe_buttons = {}
+        tf_options = [
+            ("1 Gün", "1D"),
+            ("1 Hafta", "1W"),
+            ("1 Ay", "1M"),
+            ("3 Ay", "3M"),
+            ("6 Ay", "6M"),
+            ("1 Yıl", "1Y"),
+            ("2 Yıl", "2Y"),
+            ("Tümü", "ALL")
+        ]
+
+        for label_text, tf_code in tf_options:
+            is_active = (tf_code == self.selected_timeframe)
+            bg_col = self.theme["primary"] if is_active else "#202434"
+            btn = ctk.CTkButton(
+                tf_bar, text=label_text, width=66, height=28,
+                fg_color=bg_col, hover_color=self.theme["hover"],
+                font=ctk.CTkFont(size=11, weight="bold" if is_active else "normal"),
+                command=lambda c=tf_code: self.change_analytics_timeframe(c)
+            )
+            btn.pack(side="left", padx=2, pady=4)
+            self.timeframe_buttons[tf_code] = btn
+
         # Grafik Alanı
         self.chart_container = ctk.CTkFrame(right_panel, fg_color="#131620", corner_radius=10)
         self.chart_container.pack(fill="both", expand=True, pady=(0, 8))
@@ -1140,18 +1182,31 @@ class CS2MarketApp(ctk.CTk):
         self.open_analytics_for_item(item_name)
 
     # ------------------ ANALYTICS VERİ VE GÖRSEL YÜKLEME ------------------
-    def load_item_analytics(self, item_name):
+    def load_item_analytics(self, item_name, timeframe=None):
         if not item_name or not item_name.strip():
             return
+        if timeframe:
+            self.selected_timeframe = timeframe
         self.current_analytics_item = item_name.strip()
         if hasattr(self, 'analytics_search_entry'):
             self.analytics_search_entry.delete(0, 'end')
             self.analytics_search_entry.insert(0, self.current_analytics_item)
             self.analytics_suggestions_frame.pack_forget()
             self.analytics_title_label.configure(text=self.current_analytics_item)
-            self.analytics_status_label.configure(text="⏳ Veriler ve görsel yükleniyor...", text_color="#f39c12")
+            self.analytics_status_label.configure(text=f"⏳ {self.selected_timeframe} verileri yükleniyor...", text_color="#f39c12")
 
         threading.Thread(target=self._load_item_analytics_thread, args=(self.current_analytics_item,), daemon=True).start()
+
+    def change_analytics_timeframe(self, tf_code):
+        self.selected_timeframe = tf_code
+        for code, btn in self.timeframe_buttons.items():
+            if code == tf_code:
+                btn.configure(fg_color=self.theme["primary"], font=ctk.CTkFont(size=11, weight="bold"))
+            else:
+                btn.configure(fg_color="#202434", font=ctk.CTkFont(size=11, weight="normal"))
+
+        if self.current_analytics_item:
+            self.load_item_analytics(self.current_analytics_item)
 
     def _load_item_analytics_thread(self, item_name):
         # 1. Görsel URL'sini bul
@@ -1187,12 +1242,12 @@ class CS2MarketApp(ctk.CTk):
         if hasattr(self, 'analytics_cat_label'):
             self.after(0, lambda: self.analytics_cat_label.configure(text=cat_info))
 
-        # 3. Fiyat geçmişini Neon DB'den al
+        # 3. Fiyat geçmişini ve seçili zaman aralığı (1D..2Y) verilerini üret
         rows = grafik_yonetici.esya_fiyat_gecmisi_al(item_name)
-        stats = grafik_yonetici.grafik_istatistikleri_hesapla(rows)
+        dates, prices, stats = grafik_yonetici.zaman_araligina_gore_veri_uret(rows, item_name, self.selected_timeframe)
 
         # 4. Figür oluştur
-        fig = grafik_yonetici.fiyat_grafigi_ciz(rows, item_name, tema_rengi=self.theme["accent"])
+        fig = grafik_yonetici.zamanli_fiyat_grafigi_ciz(dates, prices, item_name, self.selected_timeframe, tema_rengi=self.theme["accent"])
 
         # 5. UI güncelle
         self.after(0, lambda: self._apply_analytics_results(rows, stats, fig))
@@ -1418,6 +1473,45 @@ class CS2MarketApp(ctk.CTk):
         self.wl_count_label = ctk.CTkLabel(btn_bar, text="", font=ctk.CTkFont(size=12), text_color="#8d99ae")
         self.wl_count_label.pack(side="right", padx=10)
 
+        # Otomatik Düzenli Fiyat Takip Çubuğu
+        auto_bar = ctk.CTkFrame(self.tab_watchlist, fg_color=self.theme["card_bg"], corner_radius=8)
+        auto_bar.pack(fill="x", padx=10, pady=(0, 6))
+
+        ab_inner = ctk.CTkFrame(auto_bar, fg_color="transparent")
+        ab_inner.pack(fill="x", padx=12, pady=6)
+
+        self.auto_scan_switch = ctk.CTkSwitch(
+            ab_inner, text="⏰ Otomatik Düzenli Takip",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self.toggle_auto_scan
+        )
+        self.auto_scan_switch.pack(side="left", padx=(0, 15))
+        if self.auto_scan_active:
+            self.auto_scan_switch.select()
+
+        self.auto_interval_combo = ctk.CTkComboBox(
+            ab_inner,
+            values=["5 Dakika", "15 Dakika", "30 Dakika", "1 Saat", "3 Saat"],
+            width=130, height=32,
+            command=self._on_auto_interval_change
+        )
+        int_text = f"{self.auto_scan_interval_minutes} Dakika" if self.auto_scan_interval_minutes < 60 else f"{self.auto_scan_interval_minutes // 60} Saat"
+        self.auto_interval_combo.set(int_text)
+        self.auto_interval_combo.pack(side="left", padx=(0, 15))
+
+        self.auto_scan_status_badge = ctk.CTkLabel(
+            ab_inner,
+            text=f"🟢 Otomatik Takip Devrede (Her {self.auto_scan_interval_minutes} dk)" if self.auto_scan_active else "💤 Düzenli takip kapalı",
+            font=ctk.CTkFont(size=12),
+            text_color="#2ecc71" if self.auto_scan_active else "#8d99ae"
+        )
+        self.auto_scan_status_badge.pack(side="left", padx=5)
+
+        self.auto_scan_countdown_lbl = ctk.CTkLabel(
+            ab_inner, text="", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.theme["accent"]
+        )
+        self.auto_scan_countdown_lbl.pack(side="right", padx=10)
+
         table_frame = ctk.CTkFrame(self.tab_watchlist, fg_color="#181924", corner_radius=10)
         table_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
 
@@ -1593,6 +1687,132 @@ class CS2MarketApp(ctk.CTk):
         self.tabview.set("🔍 Eşya Tarama & Paketler")
         raw_names = [it['esya'] for it in items]
         self.start_batch_scan(raw_names, scan_wears=False)
+
+    # ------------------ OTOMATİK TAKİP LİSTESİ TARAYICISI ------------------
+    def toggle_auto_scan(self):
+        is_on = bool(self.auto_scan_switch.get())
+        self.auto_scan_active = is_on
+        self.settings["auto_scan_active"] = is_on
+        save_settings(self.settings)
+
+        if is_on:
+            self.auto_scan_status_badge.configure(
+                text=f"🟢 Otomatik Takip Devrede (Her {self.auto_scan_interval_minutes} dk)", 
+                text_color="#2ecc71"
+            )
+            self._start_auto_tracker()
+        else:
+            self.auto_scan_status_badge.configure(text="💤 Düzenli takip kapalı", text_color="#8d99ae")
+            self.auto_scan_countdown_lbl.configure(text="")
+            self._stop_auto_tracker()
+
+    def _on_auto_interval_change(self, val):
+        mins = 15
+        if "5 Dakika" in val:
+            mins = 5
+        elif "15 Dakika" in val:
+            mins = 15
+        elif "30 Dakika" in val:
+            mins = 30
+        elif "1 Saat" in val:
+            mins = 60
+        elif "3 Saat" in val:
+            mins = 180
+
+        self.auto_scan_interval_minutes = mins
+        self.settings["auto_scan_interval_minutes"] = mins
+        save_settings(self.settings)
+
+        if self.auto_scan_active:
+            self.auto_scan_status_badge.configure(
+                text=f"🟢 Otomatik Takip Devrede (Her {self.auto_scan_interval_minutes} dk)", 
+                text_color="#2ecc71"
+            )
+
+    def _start_auto_tracker(self):
+        self._auto_scan_stop_event.clear()
+        if self._auto_scan_thread and self._auto_scan_thread.is_alive():
+            return
+        self._auto_scan_thread = threading.Thread(target=self._auto_tracker_worker, daemon=True)
+        self._auto_scan_thread.start()
+
+    def _stop_auto_tracker(self):
+        self._auto_scan_stop_event.set()
+
+    def _auto_tracker_worker(self):
+        while not self._auto_scan_stop_event.is_set():
+            # İlk veya periyodik taramayı çalıştır
+            self._run_auto_scan_cycle()
+
+            interval_sec = max(self.auto_scan_interval_minutes * 60, 60)
+            for sec_left in range(interval_sec, 0, -1):
+                if self._auto_scan_stop_event.is_set():
+                    break
+                mins = sec_left // 60
+                secs = sec_left % 60
+                cd_text = f"⏱️ Sonraki Tarama: {mins:02d}:{secs:02d}"
+                self.after(0, lambda t=cd_text: self.auto_scan_countdown_lbl.configure(text=t))
+                time.sleep(1)
+
+    def _run_auto_scan_cycle(self):
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT esya, hedef_fiyat FROM takip_listesi ORDER BY id ASC;")
+                items = cur.fetchall()
+            conn.close()
+        except Exception:
+            return
+
+        if not items:
+            return
+
+        self.after(0, lambda: self.auto_scan_status_badge.configure(
+            text=f"🔄 Takip listesi taranıyor ({len(items)} eşya)...", text_color="#f39c12"
+        ))
+
+        updated_count = 0
+        for it in items:
+            if self._auto_scan_stop_event.is_set():
+                break
+            esya = it['esya']
+            target = float(it['hedef_fiyat']) if it.get('hedef_fiyat') else None
+
+            fiyat_str, hacim_str = self.get_steam_price(esya)
+            if not fiyat_str:
+                # Steam 429 veya hata durumunda Skinport yedeği
+                sp_item = grafik_yonetici.get_skinport_sales_history().get(esya)
+                if sp_item:
+                    avg_p = sp_item.get('last_24_hours', {}).get('avg') or sp_item.get('last_7_days', {}).get('avg')
+                    if avg_p:
+                        fiyat_str = f"${avg_p:.2f}"
+                        hacim_str = str(sp_item.get('last_24_hours', {}).get('volume') or "Skinport")
+
+            if fiyat_str:
+                self.save_price_to_db(esya, fiyat_str, hacim_str)
+                curr_price, _ = self.parse_numbers(fiyat_str, hacim_str)
+                updated_count += 1
+
+                # Hedef fiyat uyarısı kontrolü
+                if target is not None and curr_price is not None and curr_price <= target:
+                    self.after(0, lambda e=esya, c=curr_price, t=target: 
+                        messagebox.showinfo("🎯 Hedef Fiyat Alarmı!", f"'{e}' hedef fiyat seviyesine ulaştı!\nGüncel: ${c:.2f}\nHedef: ${t:.2f}")
+                    )
+
+            time.sleep(2.5)  # Steam dostu bekleme süresi
+
+        now_str = datetime.now().strftime("%H:%M")
+        self.after(0, lambda: self.auto_scan_status_badge.configure(
+            text=f"✅ Son Otomatik Tarama: {now_str} ({updated_count} eşya)", text_color="#2ecc71"
+        ))
+        self.after(0, self.refresh_watchlist_table)
+        self.after(0, self.refresh_database_table)
+
+    def on_app_close(self):
+        self._auto_scan_stop_event.set()
+        self.destroy()
 
     # ------------------ SEKME 3: CS2 EŞYA KATALOĞU (20.663 EŞYA) ------------------
     def setup_catalog_tab(self):
