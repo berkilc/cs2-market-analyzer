@@ -24,13 +24,19 @@ import grafik_yonetici
 import tweet_yonetici
 
 
-# Windows konsolunda UTF-8 desteği
+# Windows konsolunda UTF-8 desteği ve Görev Çubuğu Simge ID'si
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding='utf-8')
         sys.stderr.reconfigure(encoding='utf-8')
     except Exception:
         pass
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('cs2.market.analyzer.pro.v1')
+    except Exception:
+        pass
+
 
 # .env ve dosya konumunu tespit et (EXE veya normal çalışma)
 if getattr(sys, 'frozen', False):
@@ -159,6 +165,30 @@ class CS2MarketApp(ctk.CTk):
         self.title("🎮 CS2 Market Analyzer & Pro Dashboard")
         self.geometry("1160x820")
         self.minsize(1020, 700)
+
+        # Uygulama Simgesi (Co-Co-Co Chicken Icon)
+        try:
+            ico_candidates = [
+                os.path.join(base_dir, "icon.ico"),
+                os.path.join(getattr(sys, '_MEIPASS', ''), "icon.ico") if hasattr(sys, '_MEIPASS') else ""
+            ]
+            for ico in ico_candidates:
+                if ico and os.path.exists(ico):
+                    self.iconbitmap(ico)
+                    break
+        except Exception:
+            try:
+                png_candidates = [
+                    os.path.join(base_dir, "icon.png"),
+                    os.path.join(getattr(sys, '_MEIPASS', ''), "icon.png") if hasattr(sys, '_MEIPASS') else ""
+                ]
+                for png in png_candidates:
+                    if png and os.path.exists(png):
+                        self._icon_img = tk.PhotoImage(file=png)
+                        self.iconphoto(False, self._icon_img)
+                        break
+            except Exception:
+                pass
 
         self.is_scanning = False
         self.stop_requested = False

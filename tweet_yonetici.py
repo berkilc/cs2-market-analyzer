@@ -156,12 +156,20 @@ def send_windows_notification(title: str, message: str, on_click_url: str = None
                 "body": clean_msg,
                 "on_click": on_click_url or "https://x.com/CounterStrike"
             }
+            icon_path = os.path.join(BASE_DIR, "icon.png")
+            if not os.path.exists(icon_path) and hasattr(sys, '_MEIPASS'):
+                icon_path = os.path.join(sys._MEIPASS, "icon.png")
+            if os.path.exists(icon_path):
+                kwargs["icon"] = icon_path
+
             if image_url:
                 kwargs["image"] = image_url
 
             win11toast.toast(**kwargs)
+
         except Exception as e:
             print("Windows yerel bildirim hatası:", e)
+
 
     threading.Thread(target=_send, daemon=True).start()
 
