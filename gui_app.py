@@ -21,6 +21,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import katalog_yoneticisi as ky
 import gorsel_yonetici
 import grafik_yonetici
+import tweet_yonetici
+
 
 # Windows konsolunda UTF-8 desteği
 if sys.platform == "win32":
@@ -176,11 +178,26 @@ class CS2MarketApp(ctk.CTk):
         self._auto_scan_thread = None
         self._auto_scan_stop_event = threading.Event()
 
+        # CS2 Tweet ve Yatırımcı Alarm Değişkenleri
+        self.tweet_manager = tweet_yonetici.CS2TweetManager()
+        self.tweet_monitor_active = self.settings.get("tweet_monitor_active", True)
+        self.tweet_sound_alert = self.settings.get("tweet_sound_alert", True)
+        self.tweet_toast_notification = self.settings.get("tweet_toast_notification", True)
+        self.tweet_check_interval = int(self.settings.get("tweet_check_interval", 60))
+        self.displayed_tweets = []
+        self.tweets_display_limit = 15
+        self.active_tweet_filter = "ALL"
+        self.active_toast_popup = None
+        self._tweet_search_timer = None
+
+
         self.db_link = os.getenv("DATABASE_URL")
 
         self.build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_app_close)
         self.check_initial_db_status()
+        self.after(500, self.init_tweets_system)
+
 
     # ------------------ VERİTABANI YARDIMCILARI ------------------
     def get_db_connection(self):
@@ -454,6 +471,7 @@ class CS2MarketApp(ctk.CTk):
         self.tab_scan = self.tabview.add("🔍 Eşya Tarama & Paketler")
         self.tab_analytics = self.tabview.add("📈 Fiyat Grafiği & Görsel")
         self.tab_watchlist = self.tabview.add("📌 Takip Listem (Portföy)")
+        self.tab_tweets = self.tabview.add("🐦 CS2 Tweets & Akış")
         self.tab_catalog = self.tabview.add("📚 CS2 Eşya Kataloğu (20.663)")
         self.tab_database = self.tabview.add("📋 Pazar Tablosu & Analizler")
         self.tab_settings = self.tabview.add("🎨 Görünüm & Kişiselleştirme")
@@ -461,9 +479,11 @@ class CS2MarketApp(ctk.CTk):
         self.setup_scan_tab()
         self.setup_analytics_tab()
         self.setup_watchlist_tab()
+        self.setup_tweets_tab()
         self.setup_catalog_tab()
         self.setup_database_tab()
         self.setup_settings_tab()
+
 
     # ------------------ SEKME 1: EŞYA TARAMA & PAKETLER ------------------
     def setup_scan_tab(self):
@@ -1824,7 +1844,7 @@ class CS2MarketApp(ctk.CTk):
         if self.auto_scan_active:
             self.auto_scan_status_badge.configure(
                 text=f"🟢 Otomatik Takip Devrede (Her {self.auto_scan_interval_minutes} dk)", 
-                text_color="#2ecc71"
+                text_color="#249f57"
             )
 
     def _start_auto_tracker(self):
@@ -1910,7 +1930,532 @@ class CS2MarketApp(ctk.CTk):
 
     def on_app_close(self):
         self._auto_scan_stop_event.set()
+        if hasattr(self, 'tweet_manager'):
+            try:
+                self.tweet_manager.stop_background_monitor()
+            except Exception:
+                pass
+        if hasattr(self, 'active_toast_popup') and self.active_toast_popup:
+            try:
+                self.active_toast_popup.destroy()
+            except Exception:
+                pass
         self.destroy()
+
+    # ------------------ SEKME: 🐦 CS2 TWEETS & AKIŞ (YATIRIMCI ALARMI) ------------------
+    def setup_tweets_tab(self):
+        # 1. Üst Kontrol & Durum Kartı
+        header_card = ctk.CTkFrame(self.tab_tweets, fg_color=self.theme["card_bg"], corner_radius=12)
+        header_card.pack(fill="x", padx=10, pady=(10, 6))
+
+        h_inner = ctk.CTkFrame(header_card, fg_color="transparent")
+        h_inner.pack(fill="x", padx=16, pady=12)
+
+        # Sol Bilgiler
+        left_info = ctk.CTkFrame(h_inner, fg_color="transparent")
+        left_info.pack(side="left", fill="y")
+
+        lbl_title = ctk.CTkLabel(
+            left_info,
+            text="🐦 Counter-Strike 2 Resmi Akışı (@CounterStrike & Valve)",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="#ffffff"
+        )
+        lbl_title.pack(anchor="w")
+
+        info_sub = ctk.CTkFrame(left_info, fg_color="transparent")
+        info_sub.pack(anchor="w", pady=(4, 0))
+
+        self.tweet_status_badge = ctk.CTkLabel(
+            info_sub,
+            text="🟢 Canlı Takip Aktif (Her 60s)" if self.tweet_monitor_active else "⚪ Takip Duraklatıldı",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#2ecc71" if self.tweet_monitor_active else "#94a3b8"
+        )
+        self.tweet_status_badge.pack(side="left", padx=(0, 10))
+
+        self.tweet_last_check_lbl = ctk.CTkLabel(
+            info_sub,
+            text="🕒 Son Kontrol: Bekleniyor...",
+            font=ctk.CTkFont(size=11),
+            text_color="#a5adcb"
+        )
+        self.tweet_last_check_lbl.pack(side="left", padx=(0, 10))
+
+        self.tweet_count_lbl = ctk.CTkLabel(
+            info_sub,
+            text="📊 0 Paylaşım",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.theme["accent"]
+        )
+        self.tweet_count_lbl.pack(side="left")
+
+        # Sağ Aksiyon Butonları
+        right_actions = ctk.CTkFrame(h_inner, fg_color="transparent")
+        right_actions.pack(side="right")
+
+        self.tweet_refresh_btn = ctk.CTkButton(
+            right_actions,
+            text="🔄 Akışı Yenile",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=34,
+            width=115,
+            fg_color=self.theme["primary"],
+            hover_color=self.theme["hover"],
+            command=self.refresh_tweets_manual
+        )
+        self.tweet_refresh_btn.pack(side="left", padx=4)
+
+        self.tweet_test_btn = ctk.CTkButton(
+            right_actions,
+            text="🔔 Alarm & Bildirim Testi",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=34,
+            fg_color="#e63946",
+            hover_color="#d62828",
+            command=self.test_tweet_notification
+        )
+        self.tweet_test_btn.pack(side="left", padx=4)
+
+        btn_x_web = ctk.CTkButton(
+            right_actions,
+            text="🌐 X'te Aç",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=34,
+            width=85,
+            fg_color="#1d9bf0",
+            hover_color="#0c7abf",
+            command=lambda: webbrowser.open("https://x.com/CounterStrike")
+        )
+        btn_x_web.pack(side="left", padx=4)
+
+        self.tweet_monitor_switch = ctk.CTkSwitch(
+            right_actions,
+            text="Oto Alarm",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.toggle_tweet_monitor
+        )
+        if self.tweet_monitor_active:
+            self.tweet_monitor_switch.select()
+        else:
+            self.tweet_monitor_switch.deselect()
+        self.tweet_monitor_switch.pack(side="left", padx=(8, 0))
+
+        # 2. Filtre & Arama Kartı
+        filter_card = ctk.CTkFrame(self.tab_tweets, fg_color=self.theme["card_bg"], corner_radius=10)
+        filter_card.pack(fill="x", padx=10, pady=(0, 6))
+
+        f_inner = ctk.CTkFrame(filter_card, fg_color="transparent")
+        f_inner.pack(fill="x", padx=14, pady=8)
+
+        self.tweet_search_entry = ctk.CTkEntry(
+            f_inner,
+            placeholder_text="🔍 Tweet veya güncelleme ara (Release Notes, Case, Armory, Update, Train, Vertigo...)",
+            height=36,
+            font=ctk.CTkFont(size=13)
+        )
+        self.tweet_search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.tweet_search_entry.bind("<KeyRelease>", self._on_tweet_search_key_release)
+
+        # Filtre Butonları
+        filter_btns_frame = ctk.CTkFrame(f_inner, fg_color="transparent")
+        filter_btns_frame.pack(side="right")
+
+        self.tweet_filter_buttons = {}
+        filters = [
+            ("ALL", "Tümü"),
+            ("CRITICAL", "🔥 Kritik Güncellemeler"),
+            ("TWITTER", "🐦 Sadece X / Twitter"),
+            ("STEAM", "⚡ Sadece Steam")
+        ]
+        for f_key, f_label in filters:
+            btn = ctk.CTkButton(
+                filter_btns_frame,
+                text=f_label,
+                height=32,
+                font=ctk.CTkFont(size=11, weight="bold" if f_key == "ALL" else "normal"),
+                fg_color=self.theme["primary"] if f_key == "ALL" else "#222536",
+                hover_color=self.theme["hover"] if f_key == "ALL" else "#2d3248",
+                command=lambda k=f_key: self.set_tweet_filter(k)
+            )
+            btn.pack(side="left", padx=3)
+            self.tweet_filter_buttons[f_key] = btn
+
+        # 3. Tweet Akışı Scrollable Alanı
+        self.tweets_scroll_frame = ctk.CTkScrollableFrame(
+            self.tab_tweets,
+            fg_color="transparent",
+            corner_radius=0
+        )
+        self.tweets_scroll_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+
+        self.tweet_loading_lbl = ctk.CTkLabel(
+            self.tweets_scroll_frame,
+            text="⏳ Counter-Strike 2 tweetleri ve güncellemeleri yükleniyor...",
+            font=ctk.CTkFont(size=14),
+            text_color="#a5adcb"
+        )
+        self.tweet_loading_lbl.pack(pady=40)
+
+    def init_tweets_system(self):
+        """
+        Uygulama açılışında tweetleri arka planda çeker ve otomatik izleyiciyi başlatır.
+        """
+        def _bg_init():
+            success, tweets = self.tweet_manager.fetch_tweets()
+            if success and tweets:
+                self.displayed_tweets = tweets
+            else:
+                self.displayed_tweets = self.tweet_manager.cached_tweets or []
+
+            now_str = datetime.now().strftime("%H:%M:%S")
+            self.after(0, lambda: self._apply_initial_tweets(now_str))
+
+            if self.tweet_monitor_active:
+                self.tweet_manager.start_background_monitor(
+                    self.on_new_tweet_detected,
+                    interval_seconds=self.tweet_check_interval
+                )
+
+        threading.Thread(target=_bg_init, daemon=True).start()
+
+    def _apply_initial_tweets(self, check_time_str):
+        if hasattr(self, 'tweet_last_check_lbl'):
+            self.tweet_last_check_lbl.configure(text=f"🕒 Son Kontrol: {check_time_str}")
+        self.filter_and_display_tweets()
+
+    def refresh_tweets_manual(self):
+        """
+        Kullanıcı 'Akışı Yenile' butonuna bastığında anlık kontrol yapar.
+        """
+        if hasattr(self, 'tweet_refresh_btn'):
+            self.tweet_refresh_btn.configure(text="⏳ Çekiliyor...", state="disabled")
+
+        def _bg_refresh():
+            success, tweets = self.tweet_manager.fetch_tweets()
+            if success and tweets:
+                self.displayed_tweets = tweets
+            now_str = datetime.now().strftime("%H:%M:%S")
+
+            def _done():
+                if hasattr(self, 'tweet_refresh_btn'):
+                    self.tweet_refresh_btn.configure(text="🔄 Akışı Yenile", state="normal")
+                if hasattr(self, 'tweet_last_check_lbl'):
+                    self.tweet_last_check_lbl.configure(text=f"🕒 Son Kontrol: {now_str}")
+                self.filter_and_display_tweets()
+
+            self.after(0, _done)
+
+        threading.Thread(target=_bg_refresh, daemon=True).start()
+
+    def set_tweet_filter(self, filter_key):
+        self.active_tweet_filter = filter_key
+        for k, btn in getattr(self, 'tweet_filter_buttons', {}).items():
+            if k == filter_key:
+                btn.configure(fg_color=self.theme["primary"], hover_color=self.theme["hover"], font=ctk.CTkFont(size=11, weight="bold"))
+            else:
+                btn.configure(fg_color="#222536", hover_color="#2d3248", font=ctk.CTkFont(size=11, weight="normal"))
+        self.filter_and_display_tweets()
+
+    def _on_tweet_search_key_release(self, event):
+        if self._tweet_search_timer:
+            self.after_cancel(self._tweet_search_timer)
+        self._tweet_search_timer = self.after(250, self.filter_and_display_tweets)
+
+    def filter_and_display_tweets(self):
+        query = ""
+        if hasattr(self, 'tweet_search_entry'):
+            query = self.tweet_search_entry.get().strip().lower()
+
+        filtered = []
+        for tw in self.displayed_tweets:
+            # Filtreleme
+            if self.active_tweet_filter == "CRITICAL":
+                impact_lvl = tw.get("impact", {}).get("level", "LOW")
+                if impact_lvl != "CRITICAL":
+                    continue
+            elif self.active_tweet_filter == "TWITTER":
+                if "Twitter" not in tw.get("source", ""):
+                    continue
+            elif self.active_tweet_filter == "STEAM":
+                if "Steam" not in tw.get("source", ""):
+                    continue
+
+            # Arama sorgusu kontrolü
+            if query:
+                txt = tw.get("text", "").lower()
+                user = tw.get("user_name", "").lower()
+                source = tw.get("source", "").lower()
+                badge = tw.get("impact", {}).get("badge", "").lower()
+                if query not in txt and query not in user and query not in source and query not in badge:
+                    continue
+
+            filtered.append(tw)
+
+        if hasattr(self, 'tweet_count_lbl'):
+            self.tweet_count_lbl.configure(text=f"📊 {len(filtered)} Paylaşım")
+
+        self.render_tweet_cards(filtered)
+
+    def render_tweet_cards(self, tweet_list):
+        for widget in self.tweets_scroll_frame.winfo_children():
+            widget.destroy()
+
+        if not tweet_list:
+            empty_card = ctk.CTkFrame(self.tweets_scroll_frame, fg_color=self.theme["card_bg"], corner_radius=10)
+            empty_card.pack(fill="x", padx=10, pady=20)
+            lbl = ctk.CTkLabel(
+                empty_card,
+                text="📭 Gösterilecek tweet veya CS2 güncellemesi bulunamadı.\n(Arama filtrenizi temizleyebilir veya 'Akışı Yenile' yapabilirsiniz.)",
+                font=ctk.CTkFont(size=13),
+                text_color="#a5adcb",
+                justify="center"
+            )
+            lbl.pack(padx=20, pady=25)
+            return
+
+        # Performans: Çok fazla kartın arayüzü kasmasını önlemek için parçalı (pagination) yükleme
+        displayed_chunk = tweet_list[:self.tweets_display_limit]
+
+        for tw in displayed_chunk:
+            impact = tw.get("impact", {})
+            impact_level = impact.get("level", "LOW")
+            card_border = impact.get("color") if impact_level == "CRITICAL" else self.theme.get("card_border", "#1e293b")
+            border_w = 2 if impact_level == "CRITICAL" else 1
+
+            card = ctk.CTkFrame(
+                self.tweets_scroll_frame,
+                fg_color=self.theme["card_bg"],
+                corner_radius=10,
+                border_width=border_w,
+                border_color=card_border
+            )
+            card.pack(fill="x", padx=6, pady=6)
+
+            # Üst Başlık Satırı
+            head_row = ctk.CTkFrame(card, fg_color="transparent")
+            head_row.pack(fill="x", padx=14, pady=(10, 4))
+
+            source_icon = "🐦" if "Twitter" in tw.get("source", "") else "⚡"
+            author_text = f"{source_icon} {tw.get('user_name', 'Counter-Strike')} (@{tw.get('screen_name', 'CounterStrike')})"
+            author_lbl = ctk.CTkLabel(
+                head_row,
+                text=author_text,
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color="#ffffff"
+            )
+            author_lbl.pack(side="left")
+
+            time_lbl = ctk.CTkLabel(
+                head_row,
+                text=f"• 🕒 {tw.get('date_str', '')}",
+                font=ctk.CTkFont(size=11),
+                text_color="#94a3b8"
+            )
+            time_lbl.pack(side="left", padx=8)
+
+            badge_color = impact.get("color", "#3b82f6")
+            badge_lbl = ctk.CTkLabel(
+                head_row,
+                text=f" {impact.get('label', 'BİLGİ')} ",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color=badge_color,
+                text_color="#ffffff",
+                corner_radius=6
+            )
+            badge_lbl.pack(side="right")
+
+            # Gövde Metni (BBCode ve Rusça içerikten arındırılmış temiz metin)
+            raw_body = tweet_yonetici.clean_bbcode(tw.get("text", ""))
+            if not tweet_yonetici.is_valid_english_content(raw_body):
+                continue
+
+            body_lbl = ctk.CTkLabel(
+                card,
+                text=raw_body,
+                font=ctk.CTkFont(size=12),
+                text_color="#e2e8f0",
+                wraplength=980,
+                justify="left"
+            )
+            body_lbl.pack(anchor="w", padx=14, pady=(4, 8))
+
+            # Fotoğraf / Medya Eki (Arka planda asenkron indirilip gösterilir)
+            media_urls = tw.get("media_urls", [])
+            if media_urls and media_urls[0]:
+                first_img_url = media_urls[0]
+                img_box = ctk.CTkFrame(card, fg_color="#10131d", corner_radius=8, height=210)
+                img_box.pack(fill="x", padx=14, pady=(2, 8))
+                img_box.pack_propagate(False)
+
+                lbl_img = ctk.CTkLabel(img_box, text="🖼️ Görsel yükleniyor...", font=ctk.CTkFont(size=11), text_color="#64748b")
+                lbl_img.pack(expand=True)
+
+                def _make_img_cb(target_lbl, target_box):
+                    def _cb(ctk_img):
+                        def _ui_upd():
+                            try:
+                                if target_lbl.winfo_exists():
+                                    target_box.configure(height=ctk_img._size[1] + 12)
+                                    target_lbl.configure(image=ctk_img, text="")
+                            except Exception:
+                                pass
+                        try:
+                            target_lbl.after(0, _ui_upd)
+                        except Exception:
+                            pass
+                    return _cb
+
+                gorsel_yonetici.gorsel_getir_async(first_img_url, boyut=(460, 210), callback=_make_img_cb(lbl_img, img_box))
+
+            # Alt Aksiyon ve İstatistik Çubuğu
+            foot_row = ctk.CTkFrame(card, fg_color="transparent")
+            foot_row.pack(fill="x", padx=14, pady=(0, 10))
+
+            if "Twitter" in tw.get("source", "") and (tw.get("likes") or tw.get("retweets")):
+                stat_str = f"❤️ {tw.get('likes', 0):,} Beğeni   🔁 {tw.get('retweets', 0):,} Retweet"
+            else:
+                stat_str = f"🎮 {tw.get('source', 'Resmi Duyuru')}"
+
+            stat_lbl = ctk.CTkLabel(
+                foot_row,
+                text=stat_str,
+                font=ctk.CTkFont(size=11),
+                text_color="#94a3b8"
+            )
+            stat_lbl.pack(side="left")
+
+            btn_box = ctk.CTkFrame(foot_row, fg_color="transparent")
+            btn_box.pack(side="right")
+
+            btn_open = ctk.CTkButton(
+                btn_box,
+                text="🌐 Habere / Tweet'e Git",
+                height=26,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color="#1d9bf0",
+                hover_color="#0c7abf",
+                command=lambda url=tw.get("tweet_url"): webbrowser.open(url)
+            )
+            btn_open.pack(side="left", padx=4)
+
+            btn_chart = ctk.CTkButton(
+                btn_box,
+                text="📈 Piyasa Grafiğine Git",
+                height=26,
+                font=ctk.CTkFont(size=11),
+                fg_color="#2b2d42",
+                hover_color="#3d405b",
+                command=self.switch_to_analytics_tab
+            )
+            btn_chart.pack(side="left", padx=4)
+
+        # Daha Fazla Yükle Butonu (Kasmayı önleyen akıllı yükleme)
+        if len(tweet_list) > self.tweets_display_limit:
+            load_more_btn = ctk.CTkButton(
+                self.tweets_scroll_frame,
+                text=f"⬇️ Daha Fazla Tweet Göster (+15)  [ {min(self.tweets_display_limit, len(tweet_list))} / {len(tweet_list)} ]",
+                height=36,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color=self.theme["primary"],
+                hover_color=self.theme["hover"],
+                command=self._load_more_tweets
+            )
+            load_more_btn.pack(fill="x", padx=10, pady=(8, 16))
+
+    def _load_more_tweets(self):
+        self.tweets_display_limit += 15
+        self.filter_and_display_tweets()
+
+    def switch_to_tweets_tab(self):
+        try:
+            self.tabview.set("🐦 CS2 Tweets & Akış")
+        except Exception:
+            pass
+
+    def switch_to_analytics_tab(self):
+        try:
+            self.tabview.set("📈 Fiyat Grafiği & Görsel")
+        except Exception:
+            pass
+
+    def on_new_tweet_detected(self, tweet):
+        """
+        Arka plan thread'inden gelen yeni tweet sinyali.
+        Thread-safe olarak ana arayüze aktarılır.
+        """
+        self.after(0, lambda tw=tweet: self._handle_new_tweet(tw))
+
+    def _handle_new_tweet(self, tweet):
+        """
+        Yeni tweet geldiğinde:
+        1. Sesli borsa alarmı çalar.
+        2. Sağ altta Windows 10/11 yerel bildirimi gönderir.
+        3. Akışa ve başlığa ekler.
+        """
+        # 1. Sesli Alarm
+        if self.tweet_sound_alert:
+            is_crit = (tweet.get("impact", {}).get("level") == "CRITICAL")
+            tweet_yonetici.play_tweet_alarm(is_critical=is_crit)
+
+        # 2. Windows 10/11 Yerel Bildirimi (Fotoğraf Eki Dahil)
+        if self.tweet_toast_notification:
+            tweet_title = f"🚨 CS2: {tweet.get('user_name', 'Counter-Strike')} (@{tweet.get('screen_name', 'CounterStrike')})"
+            tweet_body = tweet.get('text', '')
+            tweet_url = tweet.get('tweet_url', 'https://x.com/CounterStrike')
+            media_urls = tweet.get('media_urls', [])
+            first_img = media_urls[0] if (media_urls and media_urls[0]) else None
+
+            tweet_yonetici.send_windows_notification(
+                title=tweet_title,
+                message=tweet_body,
+                on_click_url=tweet_url,
+                image_url=first_img
+            )
+
+
+        # 3. Akışa ekle
+        tweet_id = str(tweet.get("id"))
+        exists = any(str(t.get("id")) == tweet_id for t in self.displayed_tweets)
+        if not exists:
+            self.displayed_tweets.insert(0, tweet)
+            self.filter_and_display_tweets()
+
+        # 4. Üst bildirim rozeti
+        try:
+            self.status_badge.configure(
+                text=f"🚨 YENİ CS2 DUYURUSU! ({tweet.get('date_str')})",
+                text_color="#ef4444"
+            )
+        except Exception:
+            pass
+
+    def test_tweet_notification(self):
+        """
+        Kullanıcının alarm ve Windows yerel bildirimini test edebilmesi için simülasyon çalıştırır.
+        """
+        sample_tw = tweet_yonetici.create_test_tweet()
+        self._handle_new_tweet(sample_tw)
+        messagebox.showinfo("Windows Bildirim Testi", "✅ Sağ altta Windows yerel bildirimi gönderildi ve borsa alarmı çalındı!")
+
+
+    def toggle_tweet_monitor(self):
+        self.tweet_monitor_active = not self.tweet_monitor_active
+        self.settings["tweet_monitor_active"] = self.tweet_monitor_active
+        save_settings(self.settings)
+
+        if self.tweet_monitor_active:
+            self.tweet_status_badge.configure(text="🟢 Canlı Takip Aktif (Her 60s)", text_color="#2ecc71")
+            self.tweet_manager.start_background_monitor(
+                self.on_new_tweet_detected,
+                interval_seconds=self.tweet_check_interval
+            )
+            messagebox.showinfo("Canlı Takip Başlatıldı", "CS2 Twitter & Güncelleme takibi arka planda başlatıldı.")
+        else:
+            self.tweet_status_badge.configure(text="⚪ Takip Duraklatıldı", text_color="#94a3b8")
+            self.tweet_manager.stop_background_monitor()
+            messagebox.showinfo("Canlı Takip Duraklatıldı", "Tweet takibi duraklatıldı.")
+
 
     # ------------------ SEKME 3: CS2 EŞYA KATALOĞU (20.663 EŞYA) ------------------
     def setup_catalog_tab(self):
@@ -2412,6 +2957,98 @@ class CS2MarketApp(ctk.CTk):
         )
         self.btn_test_db.pack(anchor="w", padx=20, pady=(0, 18))
 
+        # Kart 4: 🐦 CS2 Canlı Tweet Takip & Yatırımcı Alarm Ayarları
+        tweet_card = ctk.CTkFrame(container, fg_color=self.theme["card_bg"], corner_radius=12)
+        tweet_card.pack(fill="x", pady=(0, 15), padx=5)
+
+        tw_title = ctk.CTkLabel(tweet_card, text="🐦 CS2 Canlı Tweet Takip & Yatırımcı Alarm Ayarları", font=ctk.CTkFont(size=16, weight="bold"))
+        tw_title.pack(anchor="w", padx=20, pady=(15, 6))
+
+        tw_desc = ctk.CTkLabel(
+            tweet_card,
+            text="@CounterStrike resmi X hesabı veya Valve güncelleme yayınladığında anında sağ altta bildirim açar\nve yatırımcının pazar hareketlerini ve operasyon/kasa güncellemelerini kaçırmaması için sesli borsa alarmı çalar.",
+            font=ctk.CTkFont(size=12), text_color="#8d99ae", justify="left"
+        )
+        tw_desc.pack(anchor="w", padx=20, pady=(0, 12))
+
+        tw_controls = ctk.CTkFrame(tweet_card, fg_color="transparent")
+        tw_controls.pack(fill="x", padx=20, pady=(0, 16))
+
+        # Switch 1: Canlı Takip
+        self.setting_tweet_mon_switch = ctk.CTkSwitch(
+            tw_controls, text="Canlı Tweet & Güncelleme Takibi (Arka Planda Dinle)", font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._setting_toggle_tweet_monitor
+        )
+        if self.tweet_monitor_active:
+            self.setting_tweet_mon_switch.select()
+        else:
+            self.setting_tweet_mon_switch.deselect()
+        self.setting_tweet_mon_switch.pack(anchor="w", pady=4)
+
+        # Switch 2: Sesli Alarm
+        self.setting_tweet_sound_switch = ctk.CTkSwitch(
+            tw_controls, text="Sesli Yatırımcı Alarmı (Windows Çanı / Borsa Tonu)", font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._setting_toggle_tweet_sound
+        )
+        if self.tweet_sound_alert:
+            self.setting_tweet_sound_switch.select()
+        else:
+            self.setting_tweet_sound_switch.deselect()
+        self.setting_tweet_sound_switch.pack(anchor="w", pady=4)
+
+        # Switch 3: Sağ Alt Toast Popup
+        self.setting_tweet_toast_switch = ctk.CTkSwitch(
+            tw_controls, text="Ekranın Sağ Altında Bildirim Kartı Aç (Toast Popup)", font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._setting_toggle_tweet_toast
+        )
+        if self.tweet_toast_notification:
+            self.setting_tweet_toast_switch.select()
+        else:
+            self.setting_tweet_toast_switch.deselect()
+        self.setting_tweet_toast_switch.pack(anchor="w", pady=4)
+
+        # Butonlar satırı
+        tw_btn_row = ctk.CTkFrame(tw_controls, fg_color="transparent")
+        tw_btn_row.pack(fill="x", pady=(12, 0))
+
+        btn_test_sound = ctk.CTkButton(
+            tw_btn_row, text="🔔 Alarm Sesini Çal", width=160, height=34,
+            fg_color="#f59e0b", hover_color="#d97706",
+            command=lambda: tweet_yonetici.play_tweet_alarm(True)
+        )
+        btn_test_sound.pack(side="left", padx=(0, 10))
+
+        self.btn_test_toast_setting = ctk.CTkButton(
+            tw_btn_row, text="🧪 Sağ Alt Bildirimi Test Et", width=200, height=34,
+            fg_color=self.theme["primary"], hover_color=self.theme["hover"],
+            command=self.test_tweet_notification
+        )
+        self.btn_test_toast_setting.pack(side="left")
+
+    def _setting_toggle_tweet_monitor(self):
+        self.tweet_monitor_active = bool(self.setting_tweet_mon_switch.get())
+        self.settings["tweet_monitor_active"] = self.tweet_monitor_active
+        save_settings(self.settings)
+        if hasattr(self, 'tweet_monitor_switch'):
+            if self.tweet_monitor_active:
+                self.tweet_monitor_switch.select()
+                self.tweet_status_badge.configure(text="🟢 Canlı Takip Aktif (Her 60s)", text_color="#2ecc71")
+                self.tweet_manager.start_background_monitor(self.on_new_tweet_detected, interval_seconds=self.tweet_check_interval)
+            else:
+                self.tweet_monitor_switch.deselect()
+                self.tweet_status_badge.configure(text="⚪ Takip Duraklatıldı", text_color="#94a3b8")
+                self.tweet_manager.stop_background_monitor()
+
+    def _setting_toggle_tweet_sound(self):
+        self.tweet_sound_alert = bool(self.setting_tweet_sound_switch.get())
+        self.settings["tweet_sound_alert"] = self.tweet_sound_alert
+        save_settings(self.settings)
+
+    def _setting_toggle_tweet_toast(self):
+        self.tweet_toast_notification = bool(self.setting_tweet_toast_switch.get())
+        self.settings["tweet_toast_notification"] = self.tweet_toast_notification
+        save_settings(self.settings)
+
     def change_accent_theme(self, theme_name):
         if theme_name in THEMES:
             self.active_theme_name = theme_name
@@ -2443,13 +3080,22 @@ class CS2MarketApp(ctk.CTk):
                 )
 
             # 4. Aksiyon butonları
-            for btn_attr in ['scan_btn', 'btn_cat_scan', 'analytics_btn_update', 'wl_add_btn', 'wl_scan_btn', 'catalog_filter_btn', 'catalog_scan_btn', 'btn_test_db']:
+            for btn_attr in ['scan_btn', 'btn_cat_scan', 'analytics_btn_update', 'wl_add_btn', 'wl_scan_btn', 'catalog_filter_btn', 'catalog_scan_btn', 'btn_test_db', 'tweet_refresh_btn', 'btn_test_toast_setting']:
                 btn = getattr(self, btn_attr, None)
                 if btn:
                     try:
                         btn.configure(fg_color=self.theme["primary"], hover_color=self.theme["hover"])
                     except Exception:
                         pass
+
+            if hasattr(self, 'tweet_filter_buttons') and hasattr(self, 'active_tweet_filter'):
+                for k, btn in self.tweet_filter_buttons.items():
+                    if k == self.active_tweet_filter:
+                        try:
+                            btn.configure(fg_color=self.theme["primary"], hover_color=self.theme["hover"])
+                        except Exception:
+                            pass
+
 
             # 5. Zaman aralığı butonları
             if hasattr(self, 'timeframe_buttons') and hasattr(self, 'selected_timeframe'):
